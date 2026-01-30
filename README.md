@@ -1,32 +1,50 @@
-# Chessist
+<p align="center">
+  <img src="icons/icon128.png" alt="Chessist Logo" width="128" height="128">
+</p>
 
-A Chromium extension that adds a live evaluation bar to Chess.com games, powered by Stockfish.
+<h1 align="center">Chessist</h1>
+
+<p align="center">
+  A Chromium extension that adds a live evaluation bar to Chess.com games, powered by Stockfish.
+  <br>
+  <strong>Created by <a href="https://github.com/lurimous/">lurimous</a></strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/lurimous/Chessist">GitHub</a> •
+  <a href="https://discord.gg/2WgHtrgqZm">Discord</a>
+</p>
+
+---
 
 ## Features
 
 - Real-time position evaluation displayed as a vertical bar
 - Score shown in pawns format (e.g., +1.5)
 - Works on live games, spectating, analysis, and archived games
-- Optional best move display
-- Configurable engine depth
+- Optional best move display with arrow overlay
+- Auto-move functionality
+- Configurable engine depth (up to 50)
+- Native Stockfish support for faster analysis
 - Runs entirely in your browser (no server required)
 
 ## Setup
 
 ### 1. Download Stockfish WASM
 
-The extension needs the Stockfish WASM files to run the chess engine. Download them:
+The extension needs the Stockfish WASM files to run the chess engine. Download them from the Lichess Stockfish.js release:
 
-1. Go to https://github.com/nickstern2002/nickstern2002.github.io/tree/master/lib
-   or https://github.com/nickstern2002/nickstern2002.github.io
-2. Download `stockfish.js` and `stockfish.wasm`
-3. Place both files in `src/engine/` (replacing the placeholder stockfish.js)
+1. Go to [lichess-org/stockfish.js releases](https://github.com/lichess-org/stockfish.js/releases/tag/ddugovic-250718)
+2. Download these files:
+   - [`stockfish.js`](https://github.com/lichess-org/stockfish.js/releases/download/ddugovic-250718/stockfish.js)
+   - [`stockfish.wasm`](https://github.com/lichess-org/stockfish.js/releases/download/ddugovic-250718/stockfish.wasm)
+3. Place both files in `src/engine/`
 
-Alternative: Use the official Stockfish.js build from https://github.com/nickstern2002/nickstern2002.github.io
+### 2. Load the Extension
 
-### 2. Load the Extension in Brave
+**For Chrome/Brave/Edge:**
 
-1. Open Brave and go to `brave://extensions`
+1. Open your browser and go to `chrome://extensions` (or `brave://extensions` / `edge://extensions`)
 2. Enable "Developer mode" (toggle in top right)
 3. Click "Load unpacked"
 4. Select the `Chessist` folder
@@ -43,15 +61,16 @@ Alternative: Use the official Stockfish.js build from https://github.com/nickste
 Click the extension icon to:
 - Toggle the extension on/off
 - See current evaluation
-
-Click "Settings" for:
 - Show/hide best move suggestion
-- Adjust engine analysis depth (10-24)
+- Enable auto-move
+- Adjust engine analysis depth (10-50)
+- Select playing color (Auto/White/Black)
+- Switch between WASM and Native engine
 
 ## Project Structure
 
 ```
-chess-live-eval/
+Chessist/
 ├── manifest.json           # Extension configuration
 ├── src/
 │   ├── content/            # Injected into Chess.com pages
@@ -73,15 +92,19 @@ chess-live-eval/
 │       ├── options.html
 │       ├── options.js
 │       └── options.css
+├── native-host/            # Native Stockfish integration
+│   ├── install.bat
+│   ├── stockfish_host.py
+│   └── manifest.json.template
 └── icons/
     ├── icon16.png
     ├── icon48.png
     └── icon128.png
 ```
 
-## Using Native Stockfish (Faster)
+## Using Native Stockfish (Recommended)
 
-For faster analysis, you can use a locally installed Stockfish instead of the built-in WASM version.
+For much faster analysis, you can use a locally installed Stockfish instead of the built-in WASM version.
 
 ### Requirements
 - Python 3 installed and in PATH
@@ -98,17 +121,17 @@ For faster analysis, you can use a locally installed Stockfish instead of the bu
    cd native-host
    install.bat
    ```
-   This registers the native messaging host with Chrome/Brave.
+   Enter your extension ID when prompted (shown in the extension popup).
 
 3. **Select Native in extension**
    - Click the extension icon
-   - Change "Engine" dropdown to "Native (Local)"
+   - Click "Native" under Engine
    - Status should show "Connected: [path to stockfish]"
 
 ### Benefits of Native
 - **Multi-threaded**: Uses all CPU cores
 - **More memory**: Larger hash tables
-- **Higher depth**: Can analyze deeper (depth 30+)
+- **Higher depth**: Can analyze deeper (depth 50+)
 - **Faster**: 10-100x faster than WASM
 
 ## Troubleshooting
@@ -123,8 +146,23 @@ For faster analysis, you can use a locally installed Stockfish instead of the bu
 - Check that `stockfish.js` and `stockfish.wasm` are in `src/engine/`
 
 **Extension not loading:**
-- Check for errors in `brave://extensions`
+- Check for errors in `chrome://extensions`
 - Look at the service worker console for errors
+
+**"Extension context invalidated" error:**
+- This happens after playing many games when Chrome restarts the service worker
+- Simply refresh the Chess.com page to restore functionality
+
+**Native engine not connecting:**
+- Run `install.bat` again with the correct extension ID
+- Make sure Python 3 is installed and in PATH
+- Check that Stockfish is installed and accessible
+
+## Credits
+
+- Created by [lurimous](https://github.com/lurimous/)
+- Powered by [Stockfish](https://stockfishchess.org/)
+- WASM build from [lichess-org/stockfish.js](https://github.com/lichess-org/stockfish.js)
 
 ## License
 
