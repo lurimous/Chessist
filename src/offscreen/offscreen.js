@@ -1,0 +1,255 @@
+// Chessist - Offscreen Document
+// Runs Stockfish WASM engine in isolated context
+
+let stockfish = null;
+let isReady = false;
+let pendingEval = null;
+let currentDepth = 18;
+let currentFen = null;
+let analysisFen = null;  // The FEN currently being analyzed (set when go command is sent)
+let analysisRunning = false;
+let pendingTimeoutOuter = null;  // Track pending timeouts to cancel on new requests
+let pendingTimeoutInner = null;
+
+// Initialize Stockfish engine
+async function initEngine() {
+  try {
+    console.log('Chessist Offscreen: Initializing Stockfish engine...');
+
+    // Get the URL for the stockfish.js worker
+    const stockfishUrl = chrome.runtime.getURL('src/engine/stockfish.js');
+    console.log('Chessist Offscreen: Loading from', stockfishUrl);
+
+    // Create worker with Stockfish
+    stockfish = new Worker(stockfishUrl);
+    console.log('Chessist Offscreen: Worker created');
+
+    stockfish.onmessage = (e) => {
+      console.log('Chessist Offscreen: Worker message received');
+      handleEngineMessage(e);
+    };
+
+    stockfish.onerror = (e) => {
+      console.error('Chessist Offscreen: Stockfish worker error:', e.message, e.filename, e.lineno);
+    };
+
+    // Wait a bit for worker to initialize, then send UCI
+    setTimeout(() => {
+      console.log('Chessist Offscreen: Sending UCI command');
+      if (stockfish) {
+        stockfish.postMessage('uci');
+        console.log('Chessist Offscreen: UCI command sent');
+      } else {
+        console.error('Chessist Offscreen: Worker is null!');
+      }
+    }, 1000);
+
+  } catch (e) {
+    console.error('Chessist Offscreen: Failed to initialize Stockfish:', e.message, e.stack);
+  }
+}
+
+// Handle messages from Stockfish engine
+function handleEngineMessage(event) {
+  const message = event.data;
+
+  console.log('Chessist Offscreen: Raw engine data type:', typeof message);
+
+  if (typeof message !== 'string') {
+    console.log('Chessist Offscreen: Non-string message:', message);
+    return;
+  }
+
+  console.log('Chessist Offscreen: Engine says:', message);
+
+  // Engine identification
+  if (message.startsWith('id name')) {
+    console.log('Chessist: Engine identified -', message);
+  }
+
+  // Engine is ready
+  if (message === 'uciok') {
+    console.log('Chessist Offscreen: UCI OK, sending isready');
+    // Don't set options - use defaults (this WASM build has fixed limits anyway)
+    stockfish.postMessage('isready');
+  }
+
+  if (message === 'readyok') {
+    isReady = true;
+    analysisRunning = false;
+    console.log('Chessist Offscreen: Stockfish engine ready!');
+
+    // Process pending evaluation if any
+    if (pendingEval) {
+      evaluatePosition(pendingEval);
+      pendingEval = null;
+    }
+  }
+
+  // Parse evaluation info
+  if (message.startsWith('info depth')) {
+    const evaluation = parseInfoLine(message);
+    if (evaluation && evaluation.depth >= 5) {
+      // Include the FEN so content script knows which position this eval is for
+      // Use analysisFen (set when go command was issued) to avoid race conditions
+      evaluation.fen = analysisFen;
+      // Extract turn from FEN (2nd part)
+      const fenParts = analysisFen ? analysisFen.split(' ') : [];
+      evaluation.turn = fenParts[1] || 'w';
+
+      // Send intermediate updates for depth >= 5
+      chrome.runtime.sendMessage({
+        type: 'EVAL_UPDATE',
+        evaluation: evaluation
+      }).catch(() => {});
+    }
+  }
+
+  // Best move found
+  if (message.startsWith('bestmove')) {
+    analysisRunning = false;
+    const parts = message.split(' ');
+    const bestMove = parts[1];
+
+    chrome.runtime.sendMessage({
+      type: 'BEST_MOVE',
+      bestMove: bestMove,
+      fen: analysisFen
+    }).catch(() => {});
+  }
+}
+
+// Parse info line from Stockfish
+function parseInfoLine(line) {
+  const evaluation = {};
+
+  // Extract depth
+  const depthMatch = line.match(/depth (\d+)/);
+  if (depthMatch) {
+    evaluation.depth = parseInt(depthMatch[1]);
+  }
+
+  // Extract score
+  const cpMatch = line.match(/score cp (-?\d+)/);
+  const mateMatch = line.match(/score mate (-?\d+)/);
+
+  if (mateMatch) {
+    evaluation.mate = parseInt(mateMatch[1]);
+  } else if (cpMatch) {
+    evaluation.cp = parseInt(cpMatch[1]);
+  }
+
+  // Extract nodes per second
+  const npsMatch = line.match(/nps (\d+)/);
+  if (npsMatch) {
+    evaluation.nps = parseInt(npsMatch[1]);
+  }
+
+  // Extract PV (principal variation)
+  const pvMatch = line.match(/ pv (.+)$/);
+  if (pvMatch) {
+    evaluation.pv = pvMatch[1].split(' ');
+  }
+
+  return (evaluation.cp !== undefined || evaluation.mate !== undefined) ? evaluation : null;
+}
+
+// Evaluate a chess position
+function evaluatePosition(fen) {
+  if (!stockfish) {
+    console.log('Chessist: Engine not initialized, queuing position');
+    pendingEval = fen;
+    return;
+  }
+
+  if (!isReady) {
+    console.log('Chessist: Engine not ready, queuing position');
+    pendingEval = fen;
+    return;
+  }
+
+  // If analyzing the same position, don't restart
+  if (fen === currentFen && analysisRunning) {
+    console.log('Chessist: Already analyzing this position');
+    return;
+  }
+
+  console.log('Chessist: Evaluating position:', fen);
+  currentFen = fen;
+  analysisRunning = true;
+
+  // Cancel any pending timeouts from previous requests
+  if (pendingTimeoutOuter) {
+    clearTimeout(pendingTimeoutOuter);
+    pendingTimeoutOuter = null;
+  }
+  if (pendingTimeoutInner) {
+    clearTimeout(pendingTimeoutInner);
+    pendingTimeoutInner = null;
+  }
+
+  // IMPORTANT: Always stop any current analysis first
+  stockfish.postMessage('stop');
+
+  // Wait a moment for stop to process before starting new analysis
+  pendingTimeoutOuter = setTimeout(() => {
+    pendingTimeoutOuter = null;
+    // Send ucinewgame to clear engine state (important for position changes)
+    stockfish.postMessage('ucinewgame');
+    stockfish.postMessage('isready');
+
+    // Small delay to ensure engine is ready
+    pendingTimeoutInner = setTimeout(() => {
+      pendingTimeoutInner = null;
+      // Set analysisFen now - this is the FEN we're actually analyzing
+      analysisFen = fen;
+      // Set position and analyze
+      stockfish.postMessage('position fen ' + fen);
+      stockfish.postMessage('go depth ' + currentDepth);
+    }, 50);
+  }, 50);
+}
+
+// Listen for messages from service worker
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('Chessist: Offscreen received message:', message.type);
+
+  if (message.type === 'EVALUATE_POSITION') {
+    evaluatePosition(message.fen);
+    sendResponse({ status: 'evaluating' });
+  } else if (message.type === 'SET_DEPTH') {
+    currentDepth = message.depth;
+    sendResponse({ status: 'ok' });
+  } else if (message.type === 'STOP') {
+    if (pendingTimeoutOuter) clearTimeout(pendingTimeoutOuter);
+    if (pendingTimeoutInner) clearTimeout(pendingTimeoutInner);
+    pendingTimeoutOuter = null;
+    pendingTimeoutInner = null;
+    if (stockfish) {
+      stockfish.postMessage('stop');
+      analysisRunning = false;
+      currentFen = null;
+      analysisFen = null;
+    }
+    sendResponse({ status: 'stopped' });
+  } else if (message.type === 'RESET') {
+    // Reset engine state
+    if (pendingTimeoutOuter) clearTimeout(pendingTimeoutOuter);
+    if (pendingTimeoutInner) clearTimeout(pendingTimeoutInner);
+    pendingTimeoutOuter = null;
+    pendingTimeoutInner = null;
+    if (stockfish) {
+      stockfish.postMessage('stop');
+      stockfish.postMessage('ucinewgame');
+      analysisRunning = false;
+      currentFen = null;
+      analysisFen = null;
+    }
+    sendResponse({ status: 'reset' });
+  }
+  return true;
+});
+
+// Initialize on load
+console.log('Chessist: Offscreen document loaded');
+initEngine();

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chessist</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <div class="header">
+      <h1>Chessist</h1>
+    </div>
+
+    <div class="toggle-section">
+      <label class="toggle">
+        <input type="checkbox" id="enableToggle" checked>
+        <span class="slider"></span>
+        <span class="label">Enabled</span>
+      </label>
+    </div>
+
+    <div class="eval-display">
+      <div class="eval-label">Current Evaluation</div>
+      <div class="eval-value" id="currentEval">--</div>
+      <div class="eval-depth" id="currentDepth"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="settings-section">
+      <h2>Settings</h2>
+
+      <label class="toggle">
+        <input type="checkbox" id="showBestMove">
+        <span class="slider"></span>
+        <span class="label">Show Best Move</span>
+      </label>
+
+      <div class="setting-row">
+        <span class="setting-label">Analysis Depth</span>
+        <div class="depth-control">
+          <input type="range" id="engineDepth" min="10" max="30" value="18" title="Analysis depth">
+          <span class="depth-value" id="depthValue">18</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="engine-section">
+      <h2>Engine</h2>
+
+      <div class="engine-toggle">
+        <button id="wasmBtn" class="engine-btn active">
+          <span class="engine-icon">🌐</span>
+          <span class="engine-name">WASM</span>
+          <span class="engine-desc">Built-in (1 thread)</span>
+        </button>
+        <button id="nativeBtn" class="engine-btn">
+          <span class="engine-icon">💻</span>
+          <span class="engine-name">Native</span>
+          <span class="engine-desc">Local Stockfish</span>
+        </button>
+      </div>
+
+      <div id="nativeStatus" class="native-status hidden">
+        <span id="nativeStatusIcon">⏳</span>
+        <span id="nativeStatusText">Connecting...</span>
+      </div>
+
+      <div id="nativeHelp" class="native-help hidden">
+        <p>Setup required:</p>
+        <ol>
+          <li>Install <a href="https://stockfishchess.org/download/" target="_blank" rel="noopener">Stockfish</a></li>
+          <li>Run <code>install.bat</code> from extension folder</li>
+        </ol>
+        <button type="button" id="copyPathBtn" class="copy-path-btn" title="Copy extension URL to locate folder">
+          <span class="path-text" id="nativeHostPath">native-host/install.bat</span>
+          <span class="copy-icon">📋</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span>Powered by Stockfish</span>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

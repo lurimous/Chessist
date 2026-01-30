@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Chessist - Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="options-container">
+    <h1>Chessist Settings</h1>
+
+    <div class="setting-group">
+      <h2>Display Options</h2>
+
+      <label class="setting">
+        <span class="setting-info">
+          <span class="setting-name">Show Best Move</span>
+          <span class="setting-desc">Display the suggested best move below the eval bar</span>
+        </span>
+        <input type="checkbox" id="showBestMove">
+        <span class="checkbox"></span>
+      </label>
+    </div>
+
+    <div class="setting-group">
+      <h2>Engine Settings</h2>
+
+      <div class="setting">
+        <span class="setting-info">
+          <span class="setting-name">Analysis Depth</span>
+          <span class="setting-desc">Higher depth = more accurate but slower (default: 18)</span>
+        </span>
+        <div class="range-container">
+          <input type="range" id="engineDepth" min="10" max="24" value="18">
+          <span class="range-value" id="depthValue">18</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <h2>About</h2>
+      <p class="about-text">
+        Chessist adds a real-time evaluation bar to Chess.com games.
+        Powered by Stockfish, running locally in your browser.
+      </p>
+      <p class="version">Version 1.0.0</p>
+    </div>
+
+    <div class="status-bar" id="statusBar">
+      Settings saved
+    </div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>
