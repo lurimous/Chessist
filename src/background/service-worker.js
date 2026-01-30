@@ -45,7 +45,8 @@ function connectNative() {
     });
 
     nativePort.onDisconnect.addListener(() => {
-      console.log('Chessist SW: Native disconnected:', chrome.runtime.lastError?.message);
+      const error = chrome.runtime.lastError?.message || 'Unknown error';
+      console.log('Chessist SW: Native disconnected:', error);
       nativePort = null;
       nativeConnected = false;
       nativePath = null;
@@ -53,6 +54,15 @@ function connectNative() {
       if (nativeWatchdogTimer) {
         clearInterval(nativeWatchdogTimer);
         nativeWatchdogTimer = null;
+      }
+
+      // Auto-fallback to WASM if native messaging is forbidden (e.g., Opera browser)
+      if (error.includes('forbidden') || error.includes('not found')) {
+        console.log('Chessist SW: Native messaging not available, falling back to WASM');
+        engineSource = 'wasm';
+        chrome.storage.sync.set({ engineSource: 'wasm' });
+        // Notify any open popups about the change
+        chrome.runtime.sendMessage({ type: 'ENGINE_SOURCE_CHANGED', source: 'wasm' }).catch(() => {});
       }
     });
 

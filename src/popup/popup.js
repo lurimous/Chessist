@@ -188,10 +188,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // Listen for eval updates
+  // Listen for eval updates and engine source changes
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'EVAL_RESULT' && message.evaluation) {
       updateEvalDisplay(message.evaluation);
+    }
+    // Handle auto-fallback from native to WASM (e.g., Opera browser)
+    if (message.type === 'ENGINE_SOURCE_CHANGED') {
+      currentEngineSource = message.source;
+      updateEngineButtons();
+      updateNativeStatusVisibility();
+      if (message.source === 'wasm') {
+        // Show brief notification that we fell back
+        nativeStatus.classList.remove('hidden', 'connected');
+        nativeStatus.classList.add('error');
+        nativeStatusIcon.textContent = '⚠';
+        nativeStatusText.textContent = 'Native not supported, using WASM';
+        setTimeout(() => {
+          nativeStatus.classList.add('hidden');
+        }, 3000);
+      }
     }
   });
 
