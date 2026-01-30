@@ -28,17 +28,14 @@
 - Native Stockfish support for faster analysis
 - Runs entirely in your browser (no server required)
 
-## Setup
+## Quick Start
 
-### 1. Download Stockfish WASM
+### 1. Download the Extension
 
-The extension needs the Stockfish WASM files to run the chess engine. Download them from the Lichess Stockfish.js release:
-
-1. Go to [lichess-org/stockfish.js releases](https://github.com/lichess-org/stockfish.js/releases/tag/ddugovic-250718)
-2. Download these files:
-   - [`stockfish.js`](https://github.com/lichess-org/stockfish.js/releases/download/ddugovic-250718/stockfish.js)
-   - [`stockfish.wasm`](https://github.com/lichess-org/stockfish.js/releases/download/ddugovic-250718/stockfish.wasm)
-3. Place both files in `src/engine/`
+Download or clone this repository:
+```
+git clone https://github.com/lurimous/Chessist.git
+```
 
 ### 2. Load the Extension
 
@@ -50,11 +47,13 @@ The extension needs the Stockfish WASM files to run the chess engine. Download t
 4. Select the `Chessist` folder
 5. The extension icon should appear in your toolbar
 
-### 3. Test It
+### 3. Play Chess!
 
 1. Go to https://www.chess.com
 2. Open any game (live, analysis, or archived)
 3. You should see an evaluation bar on the left side of the board
+
+That's it! The built-in WASM engine works out of the box.
 
 ## Configuration
 
@@ -67,44 +66,9 @@ Click the extension icon to:
 - Select playing color (Auto/White/Black)
 - Switch between WASM and Native engine
 
-## Project Structure
-
-```
-Chessist/
-├── manifest.json           # Extension configuration
-├── src/
-│   ├── content/            # Injected into Chess.com pages
-│   │   ├── content.js      # Board detection & eval bar
-│   │   └── content.css     # Eval bar styling
-│   ├── background/
-│   │   └── service-worker.js
-│   ├── engine/
-│   │   ├── stockfish.js    # Stockfish WASM (download required)
-│   │   └── stockfish.wasm  # Stockfish binary (download required)
-│   ├── offscreen/          # Runs Stockfish engine
-│   │   ├── offscreen.html
-│   │   └── offscreen.js
-│   ├── popup/              # Extension popup
-│   │   ├── popup.html
-│   │   ├── popup.js
-│   │   └── popup.css
-│   └── options/            # Settings page
-│       ├── options.html
-│       ├── options.js
-│       └── options.css
-├── native-host/            # Native Stockfish integration
-│   ├── install.bat
-│   ├── stockfish_host.py
-│   └── manifest.json.template
-└── icons/
-    ├── icon16.png
-    ├── icon48.png
-    └── icon128.png
-```
-
 ## Using Native Stockfish (Recommended)
 
-For much faster analysis, you can use a locally installed Stockfish instead of the built-in WASM version.
+For much faster analysis (10-100x), you can use a locally installed Stockfish.
 
 ### Requirements
 - Python 3 installed and in PATH
@@ -134,16 +98,47 @@ For much faster analysis, you can use a locally installed Stockfish instead of t
 - **Higher depth**: Can analyze deeper (depth 50+)
 - **Faster**: 10-100x faster than WASM
 
+## Project Structure
+
+```
+Chessist/
+├── manifest.json           # Extension configuration
+├── src/
+│   ├── content/            # Injected into Chess.com pages
+│   │   ├── content.js      # Board detection & eval bar
+│   │   └── content.css     # Eval bar styling
+│   ├── background/
+│   │   └── service-worker.js
+│   ├── engine/
+│   │   ├── stockfish.js    # Stockfish WASM (included)
+│   │   └── stockfish.wasm  # Stockfish binary (included)
+│   ├── offscreen/          # Runs Stockfish engine
+│   │   ├── offscreen.html
+│   │   └── offscreen.js
+│   ├── popup/              # Extension popup
+│   │   ├── popup.html
+│   │   ├── popup.js
+│   │   └── popup.css
+│   └── options/            # Settings page
+│       ├── options.html
+│       ├── options.js
+│       └── options.css
+├── native-host/            # Native Stockfish integration
+│   ├── install.bat
+│   ├── stockfish_host.py
+│   └── manifest.json.template
+└── icons/
+    ├── icon16.png
+    ├── icon48.png
+    └── icon128.png
+```
+
 ## Troubleshooting
 
 **Eval bar doesn't appear:**
 - Make sure you're on chess.com (not another chess site)
 - Try refreshing the page
 - Check that the extension is enabled
-
-**"Stockfish not found" or evaluation not working:**
-- Make sure you downloaded the Stockfish WASM files
-- Check that `stockfish.js` and `stockfish.wasm` are in `src/engine/`
 
 **Extension not loading:**
 - Check for errors in `chrome://extensions`
