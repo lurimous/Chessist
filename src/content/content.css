@@ -145,3 +145,27 @@
 .chess-live-eval-arrow-overlay .best-move-arrow-group {
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
 }
+
+/* Turn indicator (debug) - shows Turn/Player */
+.chess-live-eval-turn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  color: #888;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 1px 3px;
+  border-radius: 2px;
+  white-space: nowrap;
+  z-index: 15;
+  cursor: help;
+  margin-top: 20px;
+}
+
+.chess-live-eval-turn.my-turn {
+  color: #7fa650;
+  background: rgba(0, 0, 0, 0.8);
+}

@@ -2,6 +2,7 @@
 """
 Chessist - Native Messaging Host
 Connects to local Stockfish installation for faster analysis.
+Fresh Stockfish instance per evaluation for maximum reliability.
 """
 
 import sys
@@ -25,27 +26,24 @@ STOCKFISH_PATHS = [
     os.path.expanduser("~/stockfish/stockfish"),
 ]
 
+stockfish_path = None
 stockfish_process = None
-is_ready = False
-pending_eval = None  # (fen, depth) tuple waiting for engine to be ready
-current_analysis_fen = None  # FEN currently being analyzed
-pending_lock = threading.Lock()  # Protect pending_eval access
-stdin_lock = threading.Lock()  # Protect stdin writes from interleaving
+output_thread = None
+stdout_lock = threading.Lock()
+current_eval_fen = None
+stop_requested = False
 
 
 def find_stockfish():
     """Find Stockfish executable on the system."""
-    # Check environment variable first
     env_path = os.environ.get("STOCKFISH_PATH")
     if env_path and os.path.isfile(env_path):
         return env_path
 
-    # Check common paths
     for path in STOCKFISH_PATHS:
         if os.path.isfile(path):
             return path
 
-    # Try to find in PATH
     import shutil
     path = shutil.which("stockfish")
     if path:
@@ -55,99 +53,147 @@ def find_stockfish():
 
 
 def send_message(message):
-    """Send a message to the extension."""
-    encoded = json.dumps(message).encode('utf-8')
-    sys.stdout.buffer.write(struct.pack('I', len(encoded)))
-    sys.stdout.buffer.write(encoded)
-    sys.stdout.buffer.flush()
+    """Send a message to the extension (thread-safe)."""
+    with stdout_lock:
+        try:
+            encoded = json.dumps(message).encode('utf-8')
+            sys.stdout.buffer.write(struct.pack('I', len(encoded)))
+            sys.stdout.buffer.write(encoded)
+            sys.stdout.buffer.flush()
+        except Exception:
+            pass
 
 
 def read_message():
     """Read a message from the extension."""
-    raw_length = sys.stdin.buffer.read(4)
-    if not raw_length:
+    try:
+        raw_length = sys.stdin.buffer.read(4)
+        if not raw_length:
+            return None
+        length = struct.unpack('I', raw_length)[0]
+        message = sys.stdin.buffer.read(length).decode('utf-8')
+        return json.loads(message)
+    except Exception:
         return None
-    length = struct.unpack('I', raw_length)[0]
-    message = sys.stdin.buffer.read(length).decode('utf-8')
-    return json.loads(message)
 
 
-def start_stockfish(path):
-    """Start the Stockfish process."""
-    global stockfish_process, is_ready
+def kill_stockfish():
+    """Kill the current Stockfish process if running."""
+    global stockfish_process, output_thread
+
+    if stockfish_process:
+        try:
+            stockfish_process.stdin.write("quit\n")
+            stockfish_process.stdin.flush()
+        except Exception:
+            pass
+
+        try:
+            stockfish_process.terminate()
+            stockfish_process.wait(timeout=1)
+        except Exception:
+            try:
+                stockfish_process.kill()
+            except Exception:
+                pass
+
+        stockfish_process = None
+
+    output_thread = None
+
+
+def start_stockfish_and_analyze(fen, depth):
+    """Start a fresh Stockfish instance and analyze the position."""
+    global stockfish_process, output_thread, current_eval_fen, stop_requested
+
+    # Kill any existing instance
+    kill_stockfish()
+
+    stop_requested = False
+    current_eval_fen = fen
 
     try:
         stockfish_process = subprocess.Popen(
-            [path],
+            [stockfish_path],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,  # Discard stderr to prevent pipe deadlock
+            stderr=subprocess.DEVNULL,
             text=True,
             bufsize=1
         )
 
         # Start output reader thread
-        threading.Thread(target=read_stockfish_output, daemon=True).start()
+        output_thread = threading.Thread(
+            target=read_stockfish_output,
+            args=(fen, depth),
+            daemon=True
+        )
+        output_thread.start()
 
-        # Initialize UCI
-        send_command("uci")
+        # Initialize and start analysis
+        stockfish_process.stdin.write("uci\n")
+        stockfish_process.stdin.flush()
 
-        return True
     except Exception as e:
         send_message({"type": "error", "message": f"Failed to start Stockfish: {str(e)}"})
-        return False
+        current_eval_fen = None
 
 
-def read_stockfish_output():
+def read_stockfish_output(eval_fen, depth):
     """Read output from Stockfish and send to extension."""
-    global is_ready, pending_eval, current_analysis_fen
+    global stop_requested
+
+    engine_ready = False
 
     while stockfish_process and stockfish_process.poll() is None:
+        if stop_requested:
+            break
+
         try:
             line = stockfish_process.stdout.readline()
             if not line:
                 break
 
             line = line.strip()
+            if not line:
+                continue
 
             if line == "uciok":
-                send_message({"type": "uciok"})
-                send_command("isready")
+                uci_ready = True
+                # Configure engine
+                stockfish_process.stdin.write("setoption name Threads value 4\n")
+                stockfish_process.stdin.write("setoption name Hash value 128\n")
+                stockfish_process.stdin.write("isready\n")
+                stockfish_process.stdin.flush()
 
             elif line == "readyok":
-                is_ready = True
-                send_message({"type": "debug", "message": "Received readyok from Stockfish"})
-
-                # Check if there's a pending evaluation to start
-                with pending_lock:
-                    eval_to_run = pending_eval
-                    pending_eval = None
-
-                send_message({"type": "debug", "message": f"eval_to_run: {eval_to_run is not None}"})
-                if eval_to_run:
-                    fen, depth = eval_to_run
-                    current_analysis_fen = fen  # Track what we're analyzing
-                    send_message({"type": "analyzing", "fen": fen[:50], "depth": depth})
-                    send_command(f"position fen {fen}")
-                    send_command(f"go depth {depth}")
-                else:
-                    current_analysis_fen = None
+                if not engine_ready:
+                    engine_ready = True
                     send_message({"type": "ready"})
 
+                    # Start analysis
+                    send_message({"type": "analyzing", "fen": eval_fen[:50], "depth": depth})
+                    stockfish_process.stdin.write(f"position fen {eval_fen}\n")
+                    stockfish_process.stdin.write(f"go depth {depth}\n")
+                    stockfish_process.stdin.flush()
+
             elif line.startswith("info depth"):
-                # Parse evaluation info
+                if stop_requested:
+                    break
                 eval_data = parse_info(line)
-                if eval_data:
+                if eval_data and eval_data.get("depth", 0) >= 5:
                     send_message({"type": "eval", "data": eval_data})
 
             elif line.startswith("bestmove"):
+                if stop_requested:
+                    break
                 parts = line.split()
                 best_move = parts[1] if len(parts) > 1 else None
-                send_message({"type": "debug", "message": f"Stockfish bestmove: {best_move}"})
                 send_message({"type": "bestmove", "move": best_move})
+                break  # Analysis complete, exit thread
 
         except Exception as e:
-            send_message({"type": "error", "message": str(e)})
+            send_message({"type": "error", "message": f"Output error: {str(e)}"})
             break
 
 
@@ -159,9 +205,9 @@ def parse_info(line):
     if "depth " in line:
         try:
             idx = line.index("depth ") + 6
-            end = line.index(" ", idx)
+            end = line.index(" ", idx) if " " in line[idx:] else len(line)
             data["depth"] = int(line[idx:end])
-        except:
+        except Exception:
             pass
 
     # Extract score
@@ -172,7 +218,7 @@ def parse_info(line):
             while end_idx < len(line) and (line[end_idx].isdigit() or line[end_idx] == '-'):
                 end_idx += 1
             data["cp"] = int(line[idx:end_idx])
-        except:
+        except Exception:
             pass
     elif "score mate " in line:
         try:
@@ -181,31 +227,33 @@ def parse_info(line):
             while end_idx < len(line) and (line[end_idx].isdigit() or line[end_idx] == '-'):
                 end_idx += 1
             data["mate"] = int(line[idx:end_idx])
-        except:
+        except Exception:
             pass
 
-    # Extract nodes per second
+    # Extract PV for best move
+    if " pv " in line:
+        try:
+            idx = line.index(" pv ") + 4
+            pv_moves = line[idx:].split()
+            if pv_moves:
+                data["bestMove"] = pv_moves[0]
+        except Exception:
+            pass
+
+    # Extract nps
     if "nps " in line:
         try:
             idx = line.index("nps ") + 4
             end = line.index(" ", idx) if " " in line[idx:] else len(line)
             data["nps"] = int(line[idx:end])
-        except:
+        except Exception:
             pass
 
     return data if ("cp" in data or "mate" in data) else None
 
 
-def send_command(cmd):
-    """Send a command to Stockfish."""
-    if stockfish_process and stockfish_process.poll() is None:
-        with stdin_lock:
-            stockfish_process.stdin.write(cmd + "\n")
-            stockfish_process.stdin.flush()
-
-
 def main():
-    global stockfish_process, pending_eval, current_analysis_fen
+    global stockfish_path, stop_requested
 
     # Find Stockfish
     stockfish_path = find_stockfish()
@@ -213,12 +261,8 @@ def main():
     if not stockfish_path:
         send_message({
             "type": "error",
-            "message": "Stockfish not found. Please install Stockfish and add it to PATH or set STOCKFISH_PATH environment variable."
+            "message": "Stockfish not found. Install Stockfish and add to PATH or set STOCKFISH_PATH."
         })
-        return
-
-    # Start Stockfish
-    if not start_stockfish(stockfish_path):
         return
 
     send_message({"type": "started", "path": stockfish_path})
@@ -236,34 +280,26 @@ def main():
                 fen = message.get("fen")
                 depth = message.get("depth", 18)
                 if fen:
-                    # Debug: log that we received the request
-                    send_message({"type": "debug", "message": f"Received evaluate: {fen[:30]}..."})
-                    # Store pending evaluation and stop current analysis
-                    with pending_lock:
-                        pending_eval = (fen, depth)
-                    # Always send stop + isready to ensure engine responds
-                    send_command("stop")
-                    send_command("isready")
+                    # Start fresh Stockfish for this evaluation
+                    start_stockfish_and_analyze(fen, depth)
 
             elif msg_type == "stop":
-                send_command("stop")
+                stop_requested = True
+                kill_stockfish()
 
-            elif msg_type == "set_option":
-                name = message.get("name")
-                value = message.get("value")
-                if name and value is not None:
-                    send_command(f"setoption name {name} value {value}")
+            elif msg_type == "reset":
+                stop_requested = True
+                kill_stockfish()
+                send_message({"type": "debug", "message": "Engine reset (killed)"})
 
             elif msg_type == "quit":
-                send_command("quit")
                 break
 
         except Exception as e:
             send_message({"type": "error", "message": str(e)})
 
     # Cleanup
-    if stockfish_process:
-        stockfish_process.terminate()
+    kill_stockfish()
 
 
 if __name__ == "__main__":

@@ -37,11 +37,26 @@
         <span class="label">Show Best Move</span>
       </label>
 
+      <label class="toggle">
+        <input type="checkbox" id="autoMove">
+        <span class="slider"></span>
+        <span class="label">Auto Move</span>
+      </label>
+
       <div class="setting-row">
         <span class="setting-label">Analysis Depth</span>
         <div class="depth-control">
           <input type="range" id="engineDepth" min="10" max="30" value="18" title="Analysis depth">
           <span class="depth-value" id="depthValue">18</span>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <span class="setting-label">Playing As</span>
+        <div class="color-toggle">
+          <button type="button" id="colorAuto" class="color-btn active" title="Auto-detect">Auto</button>
+          <button type="button" id="colorWhite" class="color-btn" title="Force White">♔</button>
+          <button type="button" id="colorBlack" class="color-btn" title="Force Black">♚</button>
         </div>
       </div>
     </div>

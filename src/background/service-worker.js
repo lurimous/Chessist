@@ -10,6 +10,8 @@ let currentEvalFen = null; // Track which FEN is being evaluated
 let analysisEvalFen = null; // The FEN actually being analyzed by native engine
 let nativeEvalTimeout = null; // Debounce timer for native engine requests
 let pendingNativeFen = null; // FEN waiting to be evaluated after debounce
+let moveCounter = 0; // Track number of moves to adjust depth
+let lastMoveTime = Date.now(); // Track time between moves for game speed detection
 
 // Native messaging
 let nativePort = null;
@@ -20,6 +22,11 @@ let engineSource = 'wasm'; // 'wasm' or 'native'
 // Watchdog for native engine health
 let lastNativeResponseTime = Date.now();
 let nativeWatchdogTimer = null;
+
+// Reconnection handling
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 3;
+let reconnectTimer = null;
 
 // Load engine source preference
 chrome.storage.sync.get(['engineSource']).then(result => {
@@ -50,6 +57,8 @@ function connectNative() {
       nativePort = null;
       nativeConnected = false;
       nativePath = null;
+      analysisEvalFen = null; // Clear analysis state on disconnect
+      
       // Stop watchdog when disconnected
       if (nativeWatchdogTimer) {
         clearInterval(nativeWatchdogTimer);
@@ -61,7 +70,21 @@ function connectNative() {
         console.log('Chessist SW: Native messaging not available, falling back to WASM');
         engineSource = 'wasm';
         chrome.storage.sync.set({ engineSource: 'wasm' });
+        reconnectAttempts = 0; // Reset attempts when permanently failing
         // Notify any open popups about the change
+        chrome.runtime.sendMessage({ type: 'ENGINE_SOURCE_CHANGED', source: 'wasm' }).catch(() => {});
+      } else if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        // Attempt to reconnect for temporary failures
+        reconnectAttempts++;
+        console.log(`Chessist SW: Reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
+        reconnectTimer = setTimeout(() => {
+          connectNative();
+        }, 1000 * reconnectAttempts); // Exponential backoff
+      } else {
+        console.log('Chessist SW: Max reconnection attempts reached, falling back to WASM');
+        engineSource = 'wasm';
+        chrome.storage.sync.set({ engineSource: 'wasm' });
+        reconnectAttempts = 0;
         chrome.runtime.sendMessage({ type: 'ENGINE_SOURCE_CHANGED', source: 'wasm' }).catch(() => {});
       }
     });
@@ -89,10 +112,45 @@ function connectNative() {
 // Disconnect native host
 function disconnectNative() {
   if (nativePort) {
-    nativePort.disconnect();
+    try {
+      nativePort.disconnect();
+    } catch (e) {
+      console.log('Chessist SW: Error disconnecting native port:', e);
+    }
     nativePort = null;
     nativeConnected = false;
     nativePath = null;
+    analysisEvalFen = null;
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+// Safe postMessage wrapper with null check
+function sendToNativePort(message) {
+  if (!nativePort) {
+    console.error('Chessist SW: Native port is null, cannot send message');
+    // Attempt reconnection if we're supposed to be using native
+    if (engineSource === 'native') {
+      console.log('Chessist SW: Attempting to reconnect...');
+      connectNative();
+    }
+    return false;
+  }
+  
+  try {
+    nativePort.postMessage(message);
+    return true;
+  } catch (e) {
+    console.error('Chessist SW: Failed to send message to native port:', e);
+    // Port might be in invalid state, disconnect and reconnect
+    disconnectNative();
+    if (engineSource === 'native') {
+      setTimeout(connectNative, 1000);
+    }
+    return false;
   }
 }
 
@@ -104,6 +162,7 @@ function handleNativeMessage(message) {
   if (message.type === 'started') {
     nativeConnected = true;
     nativePath = message.path;
+    reconnectAttempts = 0; // Reset on successful connection
     console.log('Chessist SW: Native Stockfish started:', message.path);
   }
   else if (message.type === 'ready') {
@@ -181,7 +240,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('Chessist SW: Received message:', message.type);
 
   if (message.type === 'EVALUATE') {
-    handleEvaluateRequest(message.fen, sender.tab?.id, sendResponse);
+    handleEvaluateRequest(message.fen, message.isMouseRelease, sender.tab?.id, sendResponse);
     return true;
   }
 
@@ -206,6 +265,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'SET_ENGINE_SOURCE') {
     engineSource = message.source;
+    reconnectAttempts = 0; // Reset attempts on manual source change
     if (engineSource === 'native') {
       connectNative();
     } else {
@@ -236,8 +296,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'SET_DEPTH') {
     // Forward to native or WASM
-    if (engineSource === 'native' && nativePort) {
-      nativePort.postMessage({ type: 'set_option', name: 'Depth', value: message.depth });
+    if (engineSource === 'native') {
+      sendToNativePort({ type: 'set_option', name: 'Depth', value: message.depth });
     }
     // WASM will read from storage
     sendResponse({ success: true });
@@ -246,8 +306,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'RESET_ENGINE') {
     // Reset the engine (clear hash tables, stop analysis)
-    if (engineSource === 'native' && nativePort) {
-      nativePort.postMessage({ type: 'reset' });
+    if (engineSource === 'native') {
+      sendToNativePort({ type: 'reset' });
     } else {
       // Send reset to offscreen document
       chrome.runtime.sendMessage({ type: 'RESET' }).catch(() => {});
@@ -255,6 +315,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Clear cached evaluations
     lastEvaluation = null;
     lastBestMove = null;
+    analysisEvalFen = null;
     sendResponse({ success: true });
     return true;
   }
@@ -263,7 +324,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Handle evaluation request
-async function handleEvaluateRequest(fen, tabId, sendResponse) {
+async function handleEvaluateRequest(fen, isMouseRelease, tabId, sendResponse) {
   const settings = await chrome.storage.sync.get(['engineDepth', 'engineSource']);
   const depth = settings.engineDepth || 18;
   const source = settings.engineSource || 'wasm';
@@ -277,6 +338,41 @@ async function handleEvaluateRequest(fen, tabId, sendResponse) {
       console.log('Chessist SW: Already analyzing this position');
       sendResponse({ evaluation: lastEvaluation || { cp: 0 } });
       return;
+    }
+
+    // Detect game speed and adjust settings
+    const now = Date.now();
+    const timeSinceLastMove = now - lastMoveTime;
+    lastMoveTime = now;
+    moveCounter++;
+    
+    // Use full user-configured depth for all moves
+    let adjustedDepth = depth;
+    let debounceMs;
+    
+    // Mouse release events get priority with shorter debounce
+    if (isMouseRelease) {
+      debounceMs = 100; // Very short debounce for mouse release
+      console.log('Chessist SW: Mouse release detected, evaluating at depth', adjustedDepth);
+    } else {
+      // For auto-detected moves (opponent, animations, etc.)
+      // Bullet game: moves come in under 3 seconds apart
+      const isBulletSpeed = timeSinceLastMove < 3000;
+      
+      if (isBulletSpeed) {
+        debounceMs = 500; // Longer debounce for rapid auto-detected moves
+        console.log('Chessist SW: Auto-detected move in bullet, evaluating at depth', adjustedDepth);
+      } else if (timeSinceLastMove < 5000) {
+        debounceMs = 400; // Blitz timing
+      } else {
+        debounceMs = 300; // Rapid/classical
+      }
+    }
+
+    // Stop current analysis if one is running
+    if (analysisEvalFen && analysisEvalFen !== fen) {
+      sendToNativePort({ type: 'stop' });
+      console.log('Chessist SW: Stopping previous analysis');
     }
 
     // Debounce rapid requests to prevent overwhelming native engine
@@ -300,8 +396,17 @@ async function handleEvaluateRequest(fen, tabId, sendResponse) {
 
       analysisEvalFen = fenToEval;  // Track what we're actually analyzing
       lastNativeResponseTime = Date.now();  // Reset watchdog when sending command
-      nativePort.postMessage({ type: 'evaluate', fen: fenToEval, depth: depth });
-    }, 400); // 400ms debounce to prevent overwhelming native engine at deep depths
+      
+      // Use safe wrapper to send message
+      const sent = sendToNativePort({ type: 'evaluate', fen: fenToEval, depth: adjustedDepth });
+      
+      if (!sent) {
+        // If sending failed, fall back to WASM for this request
+        console.log('Chessist SW: Native send failed, using WASM for this evaluation');
+        analysisEvalFen = null;
+        handleWasmEvaluation(fenToEval, sendResponse);
+      }
+    }, debounceMs);
 
     // Wait for evaluation with timeout
     const id = ++requestId;
@@ -318,32 +423,37 @@ async function handleEvaluateRequest(fen, tabId, sendResponse) {
 
   } else {
     // Use WASM Stockfish
-    try {
-      await ensureOffscreenDocument();
+    await handleWasmEvaluation(fen, sendResponse);
+  }
+}
 
-      chrome.runtime.sendMessage({
-        type: 'EVALUATE_POSITION',
-        fen: fen
-      }).catch(e => {
-        console.log('Chessist SW: Offscreen message error:', e.message);
-      });
+// Separate WASM evaluation handler
+async function handleWasmEvaluation(fen, sendResponse) {
+  try {
+    await ensureOffscreenDocument();
 
-      const id = ++requestId;
-      pendingRequests.set(id, { tabId, sendResponse });
+    chrome.runtime.sendMessage({
+      type: 'EVALUATE_POSITION',
+      fen: fen
+    }).catch(e => {
+      console.log('Chessist SW: Offscreen message error:', e.message);
+    });
 
-      setTimeout(() => {
-        if (lastEvaluation) {
-          sendResponse({ evaluation: lastEvaluation });
-        } else {
-          sendResponse({ evaluation: { cp: 0 } });
-        }
-        pendingRequests.delete(id);
-      }, 5000);
+    const id = ++requestId;
+    pendingRequests.set(id, { sendResponse });
 
-    } catch (e) {
-      console.error('Chessist SW: Evaluation error:', e);
-      sendResponse({ error: e.message });
-    }
+    setTimeout(() => {
+      if (lastEvaluation) {
+        sendResponse({ evaluation: lastEvaluation });
+      } else {
+        sendResponse({ evaluation: { cp: 0 } });
+      }
+      pendingRequests.delete(id);
+    }, 5000);
+
+  } catch (e) {
+    console.error('Chessist SW: Evaluation error:', e);
+    sendResponse({ error: e.message });
   }
 }
 

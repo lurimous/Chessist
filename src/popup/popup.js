@@ -15,8 +15,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const nativeHelp = document.getElementById('nativeHelp');
   const copyIdBtn = document.getElementById('copyIdBtn');
   const extensionIdEl = document.getElementById('extensionId');
+  const autoMoveToggle = document.getElementById('autoMove');
+  const colorAutoBtn = document.getElementById('colorAuto');
+  const colorWhiteBtn = document.getElementById('colorWhite');
+  const colorBlackBtn = document.getElementById('colorBlack');
 
   let currentEngineSource = 'wasm';
+  let currentPlayerColor = 'auto'; // 'auto', 'w', or 'b'
 
   // Display the extension ID for native host setup
   const extensionId = chrome.runtime.id;
@@ -24,16 +29,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   extensionIdEl.title = 'Click to copy extension ID';
 
   // Load current settings
-  const settings = await chrome.storage.sync.get(['enabled', 'showBestMove', 'engineDepth', 'engineSource']);
+  const settings = await chrome.storage.sync.get(['enabled', 'showBestMove', 'autoMove', 'engineDepth', 'engineSource', 'playerColor']);
   enableToggle.checked = settings.enabled !== false;
   showBestMove.checked = settings.showBestMove === true;
+  autoMoveToggle.checked = settings.autoMove === true;
   engineDepth.value = settings.engineDepth || 18;
   depthValue.textContent = engineDepth.value;
   currentEngineSource = settings.engineSource || 'wasm';
+  currentPlayerColor = settings.playerColor || 'auto';
 
   // Update button states
   updateEngineButtons();
   updateNativeStatusVisibility();
+  updateColorButtons();
 
   // Toggle enabled state
   enableToggle.addEventListener('change', async () => {
@@ -46,6 +54,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   showBestMove.addEventListener('change', async () => {
     await chrome.storage.sync.set({ showBestMove: showBestMove.checked });
     notifyContentScripts({ type: 'SETTINGS_UPDATED', showBestMove: showBestMove.checked });
+  });
+
+  // Toggle auto move
+  autoMoveToggle.addEventListener('change', async () => {
+    await chrome.storage.sync.set({ autoMove: autoMoveToggle.checked });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', autoMove: autoMoveToggle.checked });
   });
 
   // Engine depth slider
@@ -69,6 +83,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Engine button clicks
   wasmBtn.addEventListener('click', () => selectEngine('wasm'));
   nativeBtn.addEventListener('click', () => selectEngine('native'));
+
+  // Player color button clicks
+  colorAutoBtn.addEventListener('click', () => selectPlayerColor('auto'));
+  colorWhiteBtn.addEventListener('click', () => selectPlayerColor('w'));
+  colorBlackBtn.addEventListener('click', () => selectPlayerColor('b'));
+
+  async function selectPlayerColor(color) {
+    currentPlayerColor = color;
+    await chrome.storage.sync.set({ playerColor: color });
+    updateColorButtons();
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', playerColor: color });
+  }
+
+  function updateColorButtons() {
+    colorAutoBtn.classList.toggle('active', currentPlayerColor === 'auto');
+    colorWhiteBtn.classList.toggle('active', currentPlayerColor === 'w');
+    colorBlackBtn.classList.toggle('active', currentPlayerColor === 'b');
+  }
 
   // Copy extension ID button
   copyIdBtn.addEventListener('click', async () => {
