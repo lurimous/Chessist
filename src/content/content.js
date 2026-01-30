@@ -16,7 +16,7 @@
   let isEnabled = true;
   let showBestMove = false;
   let autoMove = false;
-  let lastAutoMoveFen = null;  // Track FEN where we last auto-moved to avoid duplicate moves
+  let lastAutoMovePosition = null;  // Track position+turn where we last auto-moved to avoid duplicate moves
   let manualPlayerColor = 'auto';  // 'auto', 'w', or 'b' - manual override for player color
   let boardObserver = null;
   let arrowOverlay = null;  // SVG overlay for best move arrow
@@ -249,7 +249,11 @@
     }
 
     // Method 2: Simulate mouse events on squares
-    const isFlipped = board.classList?.contains('flipped') || playerColor === 'b';
+    // Check actual board visual state, not player color (manual override shouldn't affect coordinates)
+    const isFlipped = board.classList?.contains('flipped') ||
+                      board.getAttribute('data-flipped') === 'true' ||
+                      board.hasAttribute('flipped') ||
+                      board.flipped === true;
     return simulateMove(board, fromSquare, toSquare, isFlipped, promotion);
   }
 
@@ -586,12 +590,7 @@
       return 'b';
     }
 
-    // In puzzle mode, the "player" is whoever's turn it is
-    // This ensures arrow shows for the move you need to find
-    if (isPuzzleMode()) {
-      return currentTurn; // Return current turn as player color
-    }
-
+    // Check board orientation FIRST - this is the most reliable for puzzles
     const board = document.querySelector('wc-chess-board');
 
     // Method 1: Check if board is flipped - if flipped, player is black
@@ -660,17 +659,21 @@
 
     // Method 1c: Check coordinate labels to detect orientation
     // If 'a' file is on the right side, board is flipped (black's view)
-    const coords = document.querySelectorAll('.coords-files text, .coordinates-file, [class*="coordinate"]');
-    for (const coord of coords) {
-      const text = coord.textContent?.trim().toLowerCase();
-      const rect = coord.getBoundingClientRect();
-      if (text === 'a' && rect.left > window.innerWidth / 2) {
-        // 'a' file is on the right = flipped board = black
-        return 'b';
-      }
-      if (text === 'h' && rect.left < window.innerWidth / 2) {
-        // 'h' file is on the left = flipped board = black
-        return 'b';
+    if (board) {
+      const boardRect = board.getBoundingClientRect();
+      const boardCenterX = boardRect.left + boardRect.width / 2;
+      const coords = document.querySelectorAll('.coords-files text, .coordinates-file, [class*="coordinate"]');
+      for (const coord of coords) {
+        const text = coord.textContent?.trim().toLowerCase();
+        const rect = coord.getBoundingClientRect();
+        if (text === 'a' && rect.left > boardCenterX) {
+          // 'a' file is on the right = flipped board = black
+          return 'b';
+        }
+        if (text === 'h' && rect.left < boardCenterX) {
+          // 'h' file is on the left = flipped board = black
+          return 'b';
+        }
       }
     }
 
@@ -712,19 +715,29 @@
       try {
         // Chess.com might expose orientation on the element
         if (board.orientation === 'black' || board.getAttribute('orientation') === 'black') {
+          console.log('Chessist: Detected black via orientation property');
           return 'b';
         }
         // Or via a game property
         if (board.game?.getOrientation?.() === 'black' || board.game?.orientation === 'black') {
+          console.log('Chessist: Detected black via game orientation');
           return 'b';
         }
         // Check for board.isFlipped property
         if (board.isFlipped === true) {
+          console.log('Chessist: Detected black via isFlipped property');
           return 'b';
         }
       } catch (e) {
         // Ignore errors accessing properties
       }
+    }
+
+    // In puzzle mode, if board orientation checks didn't determine color,
+    // use the current turn as player color (you solve for whoever's turn it is)
+    if (isPuzzleMode()) {
+      console.log('Chessist: Puzzle mode - using current turn as player color:', currentTurn);
+      return currentTurn;
     }
 
     // Method 2: Check for bottom player indicators
@@ -1137,23 +1150,35 @@
     if (autoMove && evaluation.bestMove && evaluation.depth >= targetDepth) {
       const isPlayerTurn = playerColor && currentTurn === playerColor;
 
-      // CRITICAL: Verify the evaluation is for the CURRENT position
-      // This prevents stale evaluations from triggering moves on the wrong position
+      // CRITICAL: Verify the evaluation is for the CURRENT position AND turn
+      // This prevents stale evaluations from triggering moves on the wrong position/turn
       let evalMatchesCurrent = true;
       if (evaluation.fen && currentFen) {
-        const evalPieces = evaluation.fen.split(' ')[0];
-        const currentPieces = currentFen.split(' ')[0];
-        evalMatchesCurrent = evalPieces === currentPieces;
+        const evalPosition = evaluation.fen.split(' ').slice(0, 2).join(' ');
+        const currentPosition = currentFen.split(' ').slice(0, 2).join(' ');
+        evalMatchesCurrent = evalPosition === currentPosition;
       }
 
       // Only auto-move on player's turn, if eval matches current position,
-      // and if we haven't already moved for this position
-      if (isPlayerTurn && evalMatchesCurrent && currentFen !== lastAutoMoveFen) {
-        lastAutoMoveFen = currentFen;  // Mark this position as processed
+      // and if we haven't already moved for this position+turn
+      const positionKey = currentFen ? currentFen.split(' ').slice(0, 2).join(' ') : null;
+      if (isPlayerTurn && evalMatchesCurrent && positionKey && positionKey !== lastAutoMovePosition) {
+        lastAutoMovePosition = positionKey;  // Mark this position+turn as processed
         console.log('Chessist: Auto-move triggered for', evaluation.bestMove);
 
-        // Small delay to ensure the UI is ready
+        // Small delay to ensure the UI is ready, then re-verify before executing
+        const expectedPosition = positionKey;
         setTimeout(() => {
+          // Final verification - position must still match (prevents race condition)
+          const board = findBoard();
+          const currentFenNow = board ? extractFEN(board) : null;
+          if (currentFenNow) {
+            const nowPosition = currentFenNow.split(' ').slice(0, 2).join(' ');
+            if (nowPosition !== expectedPosition) {
+              console.log('Chessist: Aborting auto-move - position changed during delay');
+              return;
+            }
+          }
           executeMove(evaluation.bestMove);
         }, 150);
       } else if (!evalMatchesCurrent) {
@@ -1186,13 +1211,13 @@
   // Listen for eval updates from background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'EVAL_RESULT' && message.evaluation) {
-      // Only compare piece positions (first part of FEN) to detect stale evals
-      // This is lenient enough to avoid false rejections while still catching old positions
+      // Compare piece positions AND turn to detect stale evals
+      // This prevents evaluations for "white to move" triggering on "black to move" with same pieces
       if (message.evaluation.fen && currentFen) {
-        const evalPieces = message.evaluation.fen.split(' ')[0];
-        const currentPieces = currentFen.split(' ')[0];
-        if (evalPieces !== currentPieces) {
-          // Stale evaluation for a different position - skip silently
+        const evalPosition = message.evaluation.fen.split(' ').slice(0, 2).join(' ');
+        const currentPosition = currentFen.split(' ').slice(0, 2).join(' ');
+        if (evalPosition !== currentPosition) {
+          // Stale evaluation for a different position or turn - skip silently
           return;
         }
       }
@@ -1378,9 +1403,9 @@
       // Update autoMove if provided
       if (message.autoMove !== undefined) {
         autoMove = message.autoMove;
-        // Reset last auto-move FEN when toggled to allow fresh auto-move
+        // Reset last auto-move position when toggled to allow fresh auto-move
         if (autoMove) {
-          lastAutoMoveFen = null;
+          lastAutoMovePosition = null;
         }
         console.log('Chessist: Auto-move', autoMove ? 'enabled' : 'disabled');
       }
@@ -1394,6 +1419,16 @@
           const isMyTurn = playerColor && currentTurn === playerColor;
           turnIndicatorEl.textContent = `${currentTurn === 'w' ? 'W' : 'B'}/${playerColor || '?'}`;
           turnIndicatorEl.classList.toggle('my-turn', isMyTurn);
+        }
+      }
+      // Update targetDepth if provided
+      if (message.engineDepth !== undefined) {
+        targetDepth = message.engineDepth;
+        console.log('Chessist: Target depth updated to', targetDepth);
+        // Trigger re-evaluation with new depth if we have a position
+        if (currentFen && isEnabled) {
+          evalBar?.classList.add('loading');
+          requestEval(currentFen);
         }
       }
     } else if (message.type === 'RE_EVALUATE') {

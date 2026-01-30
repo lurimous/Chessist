@@ -192,21 +192,16 @@ function evaluatePosition(fen) {
   stockfish.postMessage('stop');
 
   // Wait a moment for stop to process before starting new analysis
+  // NOTE: We intentionally DO NOT send ucinewgame here to preserve the hash table
+  // This allows Stockfish to reuse transposition entries from previous analysis
+  // ucinewgame is only sent on explicit RESET (e.g., when new game detected)
   pendingTimeoutOuter = setTimeout(() => {
     pendingTimeoutOuter = null;
-    // Send ucinewgame to clear engine state (important for position changes)
-    stockfish.postMessage('ucinewgame');
-    stockfish.postMessage('isready');
-
-    // Small delay to ensure engine is ready
-    pendingTimeoutInner = setTimeout(() => {
-      pendingTimeoutInner = null;
-      // Set analysisFen now - this is the FEN we're actually analyzing
-      analysisFen = fen;
-      // Set position and analyze
-      stockfish.postMessage('position fen ' + fen);
-      stockfish.postMessage('go depth ' + currentDepth);
-    }, 50);
+    // Set analysisFen now - this is the FEN we're actually analyzing
+    analysisFen = fen;
+    // Set position and analyze (hash table is preserved for faster convergence)
+    stockfish.postMessage('position fen ' + fen);
+    stockfish.postMessage('go depth ' + currentDepth);
   }, 50);
 }
 

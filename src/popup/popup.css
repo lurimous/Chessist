@@ -368,6 +368,35 @@ input[type="range"]::-webkit-slider-thumb {
   color: #666;
 }
 
+/* Force restart button */
+.force-restart-btn {
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #3a2a2a;
+  border: 1px solid #633;
+  border-radius: 6px;
+  color: #c99;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.force-restart-btn:hover {
+  background: #4a3030;
+  border-color: #844;
+  color: #faa;
+}
+
+.force-restart-btn:active {
+  background: #523838;
+}
+
+.force-restart-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .footer {
   text-align: center;
   font-size: 10px;

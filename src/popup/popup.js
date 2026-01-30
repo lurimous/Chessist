@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const colorAutoBtn = document.getElementById('colorAuto');
   const colorWhiteBtn = document.getElementById('colorWhite');
   const colorBlackBtn = document.getElementById('colorBlack');
+  const forceRestartBtn = document.getElementById('forceRestartBtn');
 
   let currentEngineSource = 'wasm';
   let currentPlayerColor = 'auto'; // 'auto', 'w', or 'b'
@@ -68,16 +69,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   engineDepth.addEventListener('change', async () => {
-    await chrome.storage.sync.set({ engineDepth: parseInt(engineDepth.value) });
+    const newDepth = parseInt(engineDepth.value);
+    await chrome.storage.sync.set({ engineDepth: newDepth });
     // Notify offscreen document
     try {
       await chrome.runtime.sendMessage({
         type: 'SET_DEPTH',
-        depth: parseInt(engineDepth.value)
+        depth: newDepth
       });
     } catch (e) {
       // Offscreen document might not be running
     }
+    // Notify content scripts to update their target depth and re-evaluate
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', engineDepth: newDepth });
   });
 
   // Engine button clicks
@@ -116,6 +120,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
       // Fallback: select the text
       extensionIdEl.select?.();
+    }
+  });
+
+  // Force restart engine button
+  forceRestartBtn.addEventListener('click', async () => {
+    forceRestartBtn.disabled = true;
+    forceRestartBtn.textContent = 'Restarting...';
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'FORCE_RESTART_ENGINE' });
+      console.log('Force restart response:', response);
+
+      // Wait a moment, then update status and trigger re-evaluation
+      setTimeout(async () => {
+        forceRestartBtn.textContent = 'Force Restart Engine';
+        forceRestartBtn.disabled = false;
+
+        // Update native status if using native engine
+        if (currentEngineSource === 'native') {
+          await checkNativeStatus();
+        }
+
+        // Trigger re-evaluation on active Chess.com tabs
+        notifyContentScripts({ type: 'RE_EVALUATE' });
+      }, 1500);
+    } catch (e) {
+      console.error('Force restart failed:', e);
+      forceRestartBtn.textContent = 'Restart Failed';
+      setTimeout(() => {
+        forceRestartBtn.textContent = 'Force Restart Engine';
+        forceRestartBtn.disabled = false;
+      }, 2000);
     }
   });
 

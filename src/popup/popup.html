@@ -46,7 +46,7 @@
       <div class="setting-row">
         <span class="setting-label">Analysis Depth</span>
         <div class="depth-control">
-          <input type="range" id="engineDepth" min="10" max="30" value="18" title="Analysis depth">
+          <input type="range" id="engineDepth" min="10" max="50" value="18" title="Analysis depth (native supports 50+)">
           <span class="depth-value" id="depthValue">18</span>
         </div>
       </div>
@@ -96,6 +96,10 @@
         </button>
         <p class="help-hint">Copy ID above, then run install.bat and paste it when prompted</p>
       </div>
+
+      <button type="button" id="forceRestartBtn" class="force-restart-btn" title="Force restart engine if stuck">
+        Force Restart Engine
+      </button>
     </div>
 
     <div class="footer">
