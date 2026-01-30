@@ -13,18 +13,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const nativeStatusIcon = document.getElementById('nativeStatusIcon');
   const nativeStatusText = document.getElementById('nativeStatusText');
   const nativeHelp = document.getElementById('nativeHelp');
-  const copyPathBtn = document.getElementById('copyPathBtn');
-  const nativeHostPath = document.getElementById('nativeHostPath');
+  const copyIdBtn = document.getElementById('copyIdBtn');
+  const extensionIdEl = document.getElementById('extensionId');
 
   let currentEngineSource = 'wasm';
 
-  // Get and display the native-host folder path
-  const extensionUrl = chrome.runtime.getURL('');
-  // Convert chrome-extension:// URL to file path (for unpacked extensions)
-  // The user needs to find native-host folder relative to where they extracted the extension
+  // Display the extension ID for native host setup
   const extensionId = chrome.runtime.id;
-  nativeHostPath.textContent = `Extension ID: ${extensionId} → native-host/`;
-  nativeHostPath.title = 'Click to copy extension folder path';
+  extensionIdEl.textContent = extensionId;
+  extensionIdEl.title = 'Click to copy extension ID';
 
   // Load current settings
   const settings = await chrome.storage.sync.get(['enabled', 'showBestMove', 'engineDepth', 'engineSource']);
@@ -73,22 +70,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   wasmBtn.addEventListener('click', () => selectEngine('wasm'));
   nativeBtn.addEventListener('click', () => selectEngine('native'));
 
-  // Copy path button
-  copyPathBtn.addEventListener('click', async () => {
-    // For unpacked extensions, we can show the extension URL which helps locate it
-    const url = chrome.runtime.getURL('native-host/');
+  // Copy extension ID button
+  copyIdBtn.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(url);
-      copyPathBtn.classList.add('copied');
-      const originalText = nativeHostPath.textContent;
-      nativeHostPath.textContent = 'Copied! Paste in browser to locate folder';
+      await navigator.clipboard.writeText(extensionId);
+      copyIdBtn.classList.add('copied');
+      const originalText = extensionIdEl.textContent;
+      extensionIdEl.textContent = 'Copied!';
       setTimeout(() => {
-        copyPathBtn.classList.remove('copied');
-        nativeHostPath.textContent = originalText;
-      }, 2000);
+        copyIdBtn.classList.remove('copied');
+        extensionIdEl.textContent = originalText;
+      }, 1500);
     } catch (e) {
       // Fallback: select the text
-      nativeHostPath.textContent = url;
+      extensionIdEl.select?.();
     }
   });
 
