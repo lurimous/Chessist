@@ -44,6 +44,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateNativeStatusVisibility();
   updateColorButtons();
 
+  // Request last evaluation to show current state
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_LAST_EVAL' });
+    if (response?.evaluation) {
+      updateEvalDisplay(response.evaluation);
+    }
+  } catch (e) {
+    // Service worker might not have an evaluation yet
+  }
+
   // Toggle enabled state
   enableToggle.addEventListener('change', async () => {
     const enabled = enableToggle.checked;
@@ -159,7 +169,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     currentEngineSource = source;
     await chrome.storage.sync.set({ engineSource: source });
     updateEngineButtons();
-    updateNativeStatusVisibility();
+
+    // Show native status panel immediately (but don't check status yet)
+    if (source === 'native') {
+      nativeStatus.classList.remove('hidden');
+      nativeHelp.classList.remove('hidden');
+      // Show "Connecting..." state
+      nativeStatusIcon.textContent = '⏳';
+      nativeStatusText.textContent = 'Connecting...';
+      nativeStatus.classList.remove('connected', 'error');
+    } else {
+      nativeStatus.classList.add('hidden');
+      nativeHelp.classList.add('hidden');
+    }
 
     // Notify service worker to switch engine
     try {
@@ -168,15 +190,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         source: source
       });
 
-      // Wait for engine to connect, then trigger re-evaluation
+      // Wait for engine to connect, then check status and trigger re-evaluation
       if (source === 'native') {
-        // Wait for native connection before re-evaluating
+        // Wait for native connection before checking status
         setTimeout(async () => {
+          await checkNativeStatus();
           const status = await chrome.runtime.sendMessage({ type: 'CHECK_NATIVE_STATUS' });
           if (status?.connected) {
             notifyContentScripts({ type: 'RE_EVALUATE' });
           }
-        }, 1500);
+        }, 1000);
       } else {
         // WASM is always ready, trigger re-evaluation immediately
         notifyContentScripts({ type: 'RE_EVALUATE' });
@@ -198,10 +221,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Update native status visibility based on selected engine
+  // Called on initial load - selectEngine handles its own status checking
   function updateNativeStatusVisibility() {
     if (currentEngineSource === 'native') {
       nativeStatus.classList.remove('hidden');
       nativeHelp.classList.remove('hidden');
+      // Check status (for initial popup load, engine should already be connected)
       checkNativeStatus();
     } else {
       nativeStatus.classList.add('hidden');

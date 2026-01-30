@@ -23,7 +23,7 @@ h1 {
   color: #1a1a1a;
   margin-bottom: 24px;
   padding-bottom: 12px;
-  border-bottom: 2px solid #7fa650;
+  border-bottom: 2px solid #792A9E;
 }
 
 h2 {
@@ -103,7 +103,7 @@ h2 {
 }
 
 .setting input[type="checkbox"]:checked + .checkbox {
-  background: #7fa650;
+  background: #792A9E;
 }
 
 .setting input[type="checkbox"]:checked + .checkbox::after {
@@ -130,7 +130,7 @@ input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 16px;
   height: 16px;
-  background: #7fa650;
+  background: #792A9E;
   border-radius: 50%;
   cursor: pointer;
 }

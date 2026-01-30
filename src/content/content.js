@@ -24,6 +24,18 @@
 
   let targetDepth = 18; // Default depth
 
+  // Extension context validity tracking
+  let extensionContextValid = true;
+
+  function checkExtensionContext() {
+    try {
+      // This will throw if context is invalid
+      return chrome.runtime?.id != null;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Initialize settings from storage
   async function loadSettings() {
     try {
@@ -473,6 +485,30 @@
     return parsePiecesFromDOM(board);
   }
 
+  // Determine castling rights based on king and rook positions
+  function determineCastlingRights(boardArray) {
+    let rights = '';
+
+    // White kingside: King on e1 (rank 1 = index 7, file e = index 4), Rook on h1 (file h = index 7)
+    const whiteKingOnE1 = boardArray[7][4] === 'K';
+    const whiteRookOnH1 = boardArray[7][7] === 'R';
+    const whiteRookOnA1 = boardArray[7][0] === 'R';
+
+    // Black kingside: King on e8 (rank 8 = index 0, file e = index 4), Rook on h8 (file h = index 7)
+    const blackKingOnE8 = boardArray[0][4] === 'k';
+    const blackRookOnH8 = boardArray[0][7] === 'r';
+    const blackRookOnA8 = boardArray[0][0] === 'r';
+
+    // If king is on starting square and rook is on starting square, castling MAY be possible
+    // Note: We can't know for certain if they've moved and returned, but this is better than hardcoding
+    if (whiteKingOnE1 && whiteRookOnH1) rights += 'K';
+    if (whiteKingOnE1 && whiteRookOnA1) rights += 'Q';
+    if (blackKingOnE8 && blackRookOnH8) rights += 'k';
+    if (blackKingOnE8 && blackRookOnA8) rights += 'q';
+
+    return rights || '-';
+  }
+
   // Parse piece positions from DOM elements
   function parsePiecesFromDOM(board) {
     // Try multiple selectors for pieces
@@ -554,8 +590,11 @@
     // Determine whose turn from move indicators
     const turn = detectTurn();
 
-    // Basic FEN with minimal info (position + turn)
-    fen += ` ${turn} KQkq - 0 1`;
+    // Determine castling rights based on king/rook positions
+    const castlingRights = determineCastlingRights(boardArray);
+
+    // Basic FEN with minimal info (position + turn + castling)
+    fen += ` ${turn} ${castlingRights} - 0 1`;
 
     return fen;
   }
@@ -1187,9 +1226,32 @@
     }
   }
 
+  // Show refresh message when extension context is invalidated
+  function showRefreshMessage() {
+    if (evalBar) {
+      if (evalScore) {
+        evalScore.textContent = 'Refresh';
+        evalScore.title = 'Extension needs page refresh';
+        evalScore.style.cursor = 'pointer';
+        evalScore.onclick = () => window.location.reload();
+      }
+      if (bestMoveEl) {
+        bestMoveEl.textContent = 'Click to reload page';
+      }
+      evalBar.classList.remove('loading');
+    }
+  }
+
   // Request evaluation from background script
   async function requestEval(fen, isMouseRelease = false) {
     if (!isEnabled || !fen) return;
+
+    // Check if extension context is still valid
+    if (!extensionContextValid || !checkExtensionContext()) {
+      console.log('Chessist: Extension context invalid, showing refresh message');
+      showRefreshMessage();
+      return;
+    }
 
     console.log('Chessist: Requesting eval for FEN:', fen, isMouseRelease ? '(mouse release)' : '');
 
@@ -1204,26 +1266,46 @@
         updateEval(response.evaluation);
       }
     } catch (e) {
-      console.error('Chessist: Error requesting evaluation', e);
+      const errorMsg = e.message || e.toString();
+      if (errorMsg.includes('Extension context invalidated') ||
+          errorMsg.includes('message channel closed')) {
+        extensionContextValid = false;
+        showRefreshMessage();
+      } else {
+        console.error('Chessist: Error requesting evaluation', e);
+      }
     }
   }
 
   // Listen for eval updates from background
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'EVAL_RESULT' && message.evaluation) {
-      // Compare piece positions AND turn to detect stale evals
-      // This prevents evaluations for "white to move" triggering on "black to move" with same pieces
-      if (message.evaluation.fen && currentFen) {
-        const evalPosition = message.evaluation.fen.split(' ').slice(0, 2).join(' ');
-        const currentPosition = currentFen.split(' ').slice(0, 2).join(' ');
-        if (evalPosition !== currentPosition) {
-          // Stale evaluation for a different position or turn - skip silently
-          return;
+  try {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!extensionContextValid) return;
+
+      try {
+        if (message.type === 'EVAL_RESULT' && message.evaluation) {
+          // Compare piece positions AND turn to detect stale evals
+          // This prevents evaluations for "white to move" triggering on "black to move" with same pieces
+          if (message.evaluation.fen && currentFen) {
+            const evalPosition = message.evaluation.fen.split(' ').slice(0, 2).join(' ');
+            const currentPosition = currentFen.split(' ').slice(0, 2).join(' ');
+            if (evalPosition !== currentPosition) {
+              // Stale evaluation for a different position or turn - skip silently
+              return;
+            }
+          }
+          updateEval(message.evaluation);
+        }
+      } catch (e) {
+        if (e.message?.includes('Extension context invalidated')) {
+          extensionContextValid = false;
+          showRefreshMessage();
         }
       }
-      updateEval(message.evaluation);
-    }
-  });
+    });
+  } catch (e) {
+    console.log('Chessist: Could not add message listener - context invalid');
+  }
 
   // Start observing board for changes
   function observeBoard(board) {
@@ -1307,7 +1389,14 @@
         // If we just started a new game, reset the engine
         if (isStartingPosition && !wasStartingPosition && currentFen !== null) {
           console.log('Chessist: New game detected, resetting engine');
-          chrome.runtime.sendMessage({ type: 'RESET_ENGINE' }).catch(() => {});
+          if (extensionContextValid && checkExtensionContext()) {
+            chrome.runtime.sendMessage({ type: 'RESET_ENGINE' }).catch((e) => {
+              if (e.message?.includes('Extension context invalidated')) {
+                extensionContextValid = false;
+                showRefreshMessage();
+              }
+            });
+          }
         }
 
         currentFen = newFen;
@@ -1345,11 +1434,16 @@
     if (!isEnabled) return;
 
     // Reset engine state on page load to clear any stale data
-    try {
-      await chrome.runtime.sendMessage({ type: 'RESET_ENGINE' });
-      console.log('Chessist: Engine reset on page load');
-    } catch (e) {
-      // Service worker might not be ready yet
+    if (extensionContextValid && checkExtensionContext()) {
+      try {
+        await chrome.runtime.sendMessage({ type: 'RESET_ENGINE' });
+        console.log('Chessist: Engine reset on page load');
+      } catch (e) {
+        if (e.message?.includes('Extension context invalidated')) {
+          extensionContextValid = false;
+        }
+        // Service worker might not be ready yet
+      }
     }
 
     // Wait for board to appear
@@ -1382,64 +1476,77 @@
   }
 
   // Listen for messages from popup/background
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'TOGGLE_ENABLED') {
-      isEnabled = message.enabled;
-      if (evalBar) {
-        evalBar.style.display = isEnabled ? 'block' : 'none';
-      }
-    } else if (message.type === 'SETTINGS_UPDATED') {
-      // Update showBestMove if provided
-      if (message.showBestMove !== undefined) {
-        showBestMove = message.showBestMove;
-        if (bestMoveEl) {
-          bestMoveEl.style.display = showBestMove ? 'block' : 'none';
+  try {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!extensionContextValid) return;
+
+      try {
+        if (message.type === 'TOGGLE_ENABLED') {
+          isEnabled = message.enabled;
+          if (evalBar) {
+            evalBar.style.display = isEnabled ? 'block' : 'none';
+          }
+        } else if (message.type === 'SETTINGS_UPDATED') {
+          // Update showBestMove if provided
+          if (message.showBestMove !== undefined) {
+            showBestMove = message.showBestMove;
+            if (bestMoveEl) {
+              bestMoveEl.style.display = showBestMove ? 'block' : 'none';
+            }
+            // Clear arrow when best move display is disabled
+            if (!showBestMove) {
+              clearArrow();
+            }
+          }
+          // Update autoMove if provided
+          if (message.autoMove !== undefined) {
+            autoMove = message.autoMove;
+            // Reset last auto-move position when toggled to allow fresh auto-move
+            if (autoMove) {
+              lastAutoMovePosition = null;
+            }
+            console.log('Chessist: Auto-move', autoMove ? 'enabled' : 'disabled');
+          }
+          // Update playerColor if provided
+          if (message.playerColor !== undefined) {
+            manualPlayerColor = message.playerColor;
+            playerColor = detectPlayerColor();  // Re-detect with new manual setting
+            console.log('Chessist: Player color set to', manualPlayerColor, '-> detected as', playerColor);
+            // Update turn indicator
+            if (turnIndicatorEl) {
+              const isMyTurn = playerColor && currentTurn === playerColor;
+              turnIndicatorEl.textContent = `${currentTurn === 'w' ? 'W' : 'B'}/${playerColor || '?'}`;
+              turnIndicatorEl.classList.toggle('my-turn', isMyTurn);
+            }
+          }
+          // Update targetDepth if provided
+          if (message.engineDepth !== undefined) {
+            targetDepth = message.engineDepth;
+            console.log('Chessist: Target depth updated to', targetDepth);
+            // Trigger re-evaluation with new depth if we have a position
+            if (currentFen && isEnabled) {
+              evalBar?.classList.add('loading');
+              requestEval(currentFen);
+            }
+          }
+        } else if (message.type === 'RE_EVALUATE') {
+          // Engine switched - trigger re-evaluation of current position
+          if (currentFen && isEnabled) {
+            console.log('Chessist: Re-evaluating after engine switch');
+            evalBar?.classList.add('loading');
+            requestEval(currentFen);
+          }
         }
-        // Clear arrow when best move display is disabled
-        if (!showBestMove) {
-          clearArrow();
+      } catch (e) {
+        if (e.message?.includes('Extension context invalidated')) {
+          extensionContextValid = false;
+          showRefreshMessage();
         }
       }
-      // Update autoMove if provided
-      if (message.autoMove !== undefined) {
-        autoMove = message.autoMove;
-        // Reset last auto-move position when toggled to allow fresh auto-move
-        if (autoMove) {
-          lastAutoMovePosition = null;
-        }
-        console.log('Chessist: Auto-move', autoMove ? 'enabled' : 'disabled');
-      }
-      // Update playerColor if provided
-      if (message.playerColor !== undefined) {
-        manualPlayerColor = message.playerColor;
-        playerColor = detectPlayerColor();  // Re-detect with new manual setting
-        console.log('Chessist: Player color set to', manualPlayerColor, '-> detected as', playerColor);
-        // Update turn indicator
-        if (turnIndicatorEl) {
-          const isMyTurn = playerColor && currentTurn === playerColor;
-          turnIndicatorEl.textContent = `${currentTurn === 'w' ? 'W' : 'B'}/${playerColor || '?'}`;
-          turnIndicatorEl.classList.toggle('my-turn', isMyTurn);
-        }
-      }
-      // Update targetDepth if provided
-      if (message.engineDepth !== undefined) {
-        targetDepth = message.engineDepth;
-        console.log('Chessist: Target depth updated to', targetDepth);
-        // Trigger re-evaluation with new depth if we have a position
-        if (currentFen && isEnabled) {
-          evalBar?.classList.add('loading');
-          requestEval(currentFen);
-        }
-      }
-    } else if (message.type === 'RE_EVALUATE') {
-      // Engine switched - trigger re-evaluation of current position
-      if (currentFen && isEnabled) {
-        console.log('Chessist: Re-evaluating after engine switch');
-        evalBar?.classList.add('loading');
-        requestEval(currentFen);
-      }
-    }
-  });
+    });
+  } catch (e) {
+    console.log('Chessist: Could not add settings listener - context invalid');
+  }
 
   // Start when DOM is ready
   if (document.readyState === 'loading') {

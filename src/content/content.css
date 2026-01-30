@@ -78,7 +78,7 @@
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   font-size: 9px;
   font-weight: 600;
-  color: #7fa650;
+  color: #792A9E;
   background: rgba(0, 0, 0, 0.8);
   padding: 2px 4px;
   border-radius: 3px;
@@ -166,6 +166,6 @@
 }
 
 .chess-live-eval-turn.my-turn {
-  color: #7fa650;
+  color: #792A9E;
   background: rgba(0, 0, 0, 0.8);
 }

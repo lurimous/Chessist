@@ -156,9 +156,37 @@ function applyMove(fen, move) {
     // Update turn
     const newTurn = turn === 'w' ? 'b' : 'w';
 
-    // Simplified: don't track castling rights or en passant changes
-    // We only use this for position matching, not for actual game state
-    return `${newBoard} ${newTurn} ${castling} - 0 1`;
+    // Update castling rights based on the move
+    let newCastling = castling;
+
+    // If king moves, remove that side's castling rights
+    if (piece.toLowerCase() === 'k') {
+      if (turn === 'w') {
+        newCastling = newCastling.replace(/[KQ]/g, '');
+      } else {
+        newCastling = newCastling.replace(/[kq]/g, '');
+      }
+    }
+
+    // If rook moves from corner, remove that castling right
+    if (piece.toLowerCase() === 'r') {
+      // White rooks: a1 (file 0, rank 0) = Q, h1 (file 7, rank 0) = K
+      if (fromFile === 0 && fromRank === 0) newCastling = newCastling.replace('Q', '');
+      if (fromFile === 7 && fromRank === 0) newCastling = newCastling.replace('K', '');
+      // Black rooks: a8 (file 0, rank 7) = q, h8 (file 7, rank 7) = k
+      if (fromFile === 0 && fromRank === 7) newCastling = newCastling.replace('q', '');
+      if (fromFile === 7 && fromRank === 7) newCastling = newCastling.replace('k', '');
+    }
+
+    // If rook is captured on corner, remove that castling right
+    if (toFile === 0 && toRank === 0) newCastling = newCastling.replace('Q', '');
+    if (toFile === 7 && toRank === 0) newCastling = newCastling.replace('K', '');
+    if (toFile === 0 && toRank === 7) newCastling = newCastling.replace('q', '');
+    if (toFile === 7 && toRank === 7) newCastling = newCastling.replace('k', '');
+
+    if (!newCastling) newCastling = '-';
+
+    return `${newBoard} ${newTurn} ${newCastling} - 0 1`;
   } catch (e) {
     console.error('Chessist SW: applyMove error:', e);
     return null;
@@ -574,6 +602,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'GET_LAST_EVAL') {
+    // Return the last evaluation for popup display
+    sendResponse({ evaluation: lastEvaluation });
+    return true;
+  }
+
   if (message.type === 'SET_DEPTH') {
     // Forward to native or WASM
     if (engineSource === 'native') {
@@ -792,6 +826,7 @@ async function handleWasmEvaluation(fen, sendResponse) {
 // Broadcast message to all Chess.com tabs
 async function broadcastToContentScripts(message) {
   try {
+    // Send to content scripts in Chess.com tabs
     const tabs = await chrome.tabs.query({ url: 'https://www.chess.com/*' });
     for (const tab of tabs) {
       try {
@@ -799,6 +834,12 @@ async function broadcastToContentScripts(message) {
       } catch (e) {
         // Tab might not have content script loaded
       }
+    }
+    // Also broadcast to extension pages (popup) for live updates
+    try {
+      chrome.runtime.sendMessage(message);
+    } catch (e) {
+      // Popup might not be open
     }
   } catch (e) {
     console.error('Broadcast error:', e);
