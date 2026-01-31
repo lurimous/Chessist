@@ -384,10 +384,64 @@ input[type="range"]::-webkit-slider-thumb {
   color: #fff;
 }
 
+/* Auto-move settings panel */
+.auto-move-settings {
+  margin-top: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  background: #252525;
+  border-radius: 6px;
+  border-left: 2px solid #792A9E;
+}
+
+.auto-move-settings.hidden {
+  display: none;
+}
+
+.setting-row.compact {
+  margin-top: 8px;
+}
+
+.setting-row.compact:first-child {
+  margin-top: 0;
+}
+
+.delay-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.delay-control input[type="number"] {
+  width: 50px;
+  padding: 4px 6px;
+  background: #333;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  text-align: center;
+}
+
+.delay-control input[type="number"]:focus {
+  outline: none;
+  border-color: #792A9E;
+}
+
+.delay-separator {
+  color: #666;
+  font-size: 12px;
+}
+
 .help-hint {
   margin-top: 8px;
   font-size: 10px;
   color: #666;
+}
+
+.help-hint.stealth-hint {
+  margin-top: 0;
+  margin-bottom: 8px;
 }
 
 /* Force restart button */
@@ -463,4 +517,22 @@ input[type="range"]::-webkit-slider-thumb {
   color: #444;
   display: block;
   margin-top: 6px;
+}
+
+/* Sub-toggle for nested settings */
+.sub-toggle {
+  margin-left: 16px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.sub-toggle .label {
+  margin-left: 36px;
+}
+
+/* Delay settings hide when instant move is enabled */
+#delaySettings.disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }

@@ -8,6 +8,8 @@
   let evalBarFill = null;
   let evalScore = null;
   let bestMoveEl = null;
+  let countdownEl = null;  // Countdown timer for auto-move
+  let countdownInterval = null;  // Interval ID for countdown updates
   let depthEl = null;
   let turnIndicatorEl = null;  // Debug indicator for turn/player detection
   let currentFen = null;
@@ -23,6 +25,18 @@
   let currentBestMove = null;  // Track current best move to avoid redrawing
 
   let targetDepth = 18; // Default depth
+  let stealthMode = false; // Disable console logging when true
+  let instantMove = false; // Make moves instantly without delay
+  let autoMoveDelayMin = 0.5; // Minimum delay in seconds before auto-move
+  let autoMoveDelayMax = 2; // Maximum delay in seconds before auto-move
+  let skillLevel = 20; // Stockfish skill level (1-20, 20 = best)
+
+  // Conditional logging - respects stealth mode
+  function log(...args) {
+    if (!stealthMode) {
+      console.log(...args);
+    }
+  }
 
   // Extension context validity tracking
   let extensionContextValid = true;
@@ -39,14 +53,22 @@
   // Initialize settings from storage
   async function loadSettings() {
     try {
-      const result = await chrome.storage.sync.get(['enabled', 'showBestMove', 'autoMove', 'engineDepth', 'playerColor']);
+      const result = await chrome.storage.sync.get([
+        'enabled', 'showBestMove', 'autoMove', 'instantMove', 'stealthMode', 'engineDepth', 'playerColor',
+        'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
+      ]);
       isEnabled = result.enabled !== false; // Default true
       showBestMove = result.showBestMove === true; // Default false
       autoMove = result.autoMove === true; // Default false
+      instantMove = result.instantMove === true; // Default false
+      stealthMode = result.stealthMode === true; // Default false
       targetDepth = result.engineDepth || 18;
       manualPlayerColor = result.playerColor || 'auto';
+      autoMoveDelayMin = result.autoMoveDelayMin ?? 0.5;
+      autoMoveDelayMax = result.autoMoveDelayMax ?? 2;
+      skillLevel = result.skillLevel ?? 20;
     } catch (e) {
-      console.log('Chessist: Using default settings');
+      // Using default settings - don't log in case stealth mode is on
     }
   }
 
@@ -146,7 +168,7 @@
 
     // Validate coordinates
     if (isNaN(from.x) || isNaN(from.y) || isNaN(to.x) || isNaN(to.y)) {
-      console.log('Chessist: Invalid arrow coordinates, skipping');
+      log('Chessist: Invalid arrow coordinates, skipping');
       return;
     }
 
@@ -180,7 +202,7 @@
 
     // Validate calculated values
     if (isNaN(lineEndX) || isNaN(lineEndY) || isNaN(angle)) {
-      console.log('Chessist: Invalid arrow geometry, skipping');
+      log('Chessist: Invalid arrow geometry, skipping');
       return;
     }
 
@@ -207,7 +229,7 @@
 
     // Validate arrowhead values
     if (isNaN(headTipX) || isNaN(headTipY) || isNaN(headBaseX) || isNaN(headBaseY) || isNaN(perpX) || isNaN(perpY)) {
-      console.log('Chessist: Invalid arrowhead geometry, skipping');
+      log('Chessist: Invalid arrowhead geometry, skipping');
       return;
     }
 
@@ -248,7 +270,7 @@
     const toSquare = move.substring(2, 4);
     const promotion = move.length > 4 ? move[4] : null;
 
-    console.log(`Chessist: Auto-moving ${fromSquare} to ${toSquare}${promotion ? ' promoting to ' + promotion : ''}`);
+    log(`Chessist: Auto-moving ${fromSquare} to ${toSquare}${promotion ? ' promoting to ' + promotion : ''}`);
 
     // Method 1: Try Chess.com's game API directly
     try {
@@ -257,7 +279,7 @@
         return true;
       }
     } catch (e) {
-      console.log('Chessist: Game API move failed:', e);
+      log('Chessist: Game API move failed:', e);
     }
 
     // Method 2: Simulate mouse events on squares
@@ -275,7 +297,7 @@
     const pieceEl = findPieceOnSquare(board, from);
 
     if (!pieceEl) {
-      console.log('Chessist: Could not find piece on', from);
+      log('Chessist: Could not find piece on', from);
       return false;
     }
 
@@ -299,7 +321,7 @@
       toY = boardRect.top + (7 - toRank + 0.5) * squareSize;
     }
 
-    console.log(`Chessist: Simulating drag from (${fromX.toFixed(0)}, ${fromY.toFixed(0)}) to (${toX.toFixed(0)}, ${toY.toFixed(0)})`);
+    log(`Chessist: Simulating drag from (${fromX.toFixed(0)}, ${fromY.toFixed(0)}) to (${toX.toFixed(0)}, ${toY.toFixed(0)})`);
 
     // Use pointer events (more reliable for modern web components)
     const pointerDownEvent = new PointerEvent('pointerdown', {
@@ -621,12 +643,67 @@
   function detectPlayerColor() {
     // Manual override takes priority
     if (manualPlayerColor === 'w') {
-      console.log('Chessist: Using manual player color: white');
+      log('Chessist: Using manual player color: white');
       return 'w';
     }
     if (manualPlayerColor === 'b') {
-      console.log('Chessist: Using manual player color: black');
+      log('Chessist: Using manual player color: black');
       return 'b';
+    }
+
+    // Puzzle detection: Check coach speech for "X to move" (Daily puzzles)
+    // Class-based detection (most reliable)
+    const puzzleColorIcon = document.querySelector('.cc-coach-feedback-detail-icon.cc-coach-feedback-detail-colorToMove');
+    if (puzzleColorIcon) {
+      if (puzzleColorIcon.classList.contains('cc-coach-feedback-detail-black-to-move')) {
+        log('Chessist: Detected black via puzzle coach (class)');
+        return 'b';
+      }
+      if (puzzleColorIcon.classList.contains('cc-coach-feedback-detail-white-to-move')) {
+        log('Chessist: Detected white via puzzle coach (class)');
+        return 'w';
+      }
+    }
+
+    // Text-based detection (fallback for daily puzzles)
+    const puzzleColorText = document.querySelector('.cc-coach-feedback-detail-text');
+    if (puzzleColorText) {
+      const text = puzzleColorText.textContent?.toLowerCase() || '';
+      if (text.includes('black to move')) {
+        log('Chessist: Detected black via puzzle coach (text)');
+        return 'b';
+      }
+      if (text.includes('white to move')) {
+        log('Chessist: Detected white via puzzle coach (text)');
+        return 'w';
+      }
+    }
+
+    // Puzzle Rush detection: Check sidebar status square
+    const puzzleRushSquare = document.querySelector('.sidebar-status-square-sidebar-square');
+    if (puzzleRushSquare) {
+      if (puzzleRushSquare.classList.contains('sidebar-status-square-black')) {
+        log('Chessist: Detected black via puzzle rush sidebar (class)');
+        return 'b';
+      }
+      if (puzzleRushSquare.classList.contains('sidebar-status-square-white')) {
+        log('Chessist: Detected white via puzzle rush sidebar (class)');
+        return 'w';
+      }
+    }
+
+    // Puzzle Rush text detection (fallback)
+    const puzzleRushHeading = document.querySelector('.section-heading-title');
+    if (puzzleRushHeading) {
+      const text = puzzleRushHeading.textContent?.toLowerCase() || '';
+      if (text.includes('black to move')) {
+        log('Chessist: Detected black via puzzle rush heading (text)');
+        return 'b';
+      }
+      if (text.includes('white to move')) {
+        log('Chessist: Detected white via puzzle rush heading (text)');
+        return 'w';
+      }
     }
 
     // Check board orientation FIRST - this is the most reliable for puzzles
@@ -634,13 +711,13 @@
 
     // Method 1: Check if board is flipped - if flipped, player is black
     if (board?.classList.contains('flipped')) {
-      console.log('Chessist: Detected black via flipped class');
+      log('Chessist: Detected black via flipped class');
       return 'b';
     }
 
     // Method 1b: Check board's flipped attribute or property
     if (board?.hasAttribute('flipped') || board?.flipped === true) {
-      console.log('Chessist: Detected black via flipped attribute');
+      log('Chessist: Detected black via flipped attribute');
       return 'b';
     }
 
@@ -657,22 +734,22 @@
 
           // If rank "1" is near the top (y < 50 in viewBox 0-100), board is flipped
           if (content === '1' && y < 50) {
-            console.log('Chessist: Detected black via SVG rank 1 at top (y=' + y + ')');
+            log('Chessist: Detected black via SVG rank 1 at top (y=' + y + ')');
             return 'b';
           }
           // If rank "8" is near the top, board is normal (white's view)
           if (content === '8' && y < 50) {
-            console.log('Chessist: Detected white via SVG rank 8 at top (y=' + y + ')');
+            log('Chessist: Detected white via SVG rank 8 at top (y=' + y + ')');
             return 'w';
           }
           // If file "a" is on the right (x > 50), board is flipped
           if (content === 'a' && x > 50) {
-            console.log('Chessist: Detected black via SVG file a on right (x=' + x + ')');
+            log('Chessist: Detected black via SVG file a on right (x=' + x + ')');
             return 'b';
           }
           // If file "a" is on the left, board is normal
           if (content === 'a' && x < 50) {
-            console.log('Chessist: Detected white via SVG file a on left (x=' + x + ')');
+            log('Chessist: Detected white via SVG file a on left (x=' + x + ')');
             return 'w';
           }
         }
@@ -687,10 +764,10 @@
         const boardRect = board.getBoundingClientRect();
         // If white king is in the top half of the board visually, player is black
         if (kingRect.top < boardRect.top + boardRect.height / 2) {
-          console.log('Chessist: Detected black via white king position');
+          log('Chessist: Detected black via white king position');
           return 'b';
         } else {
-          console.log('Chessist: Detected white via white king position');
+          log('Chessist: Detected white via white king position');
           return 'w';
         }
       }
@@ -754,17 +831,17 @@
       try {
         // Chess.com might expose orientation on the element
         if (board.orientation === 'black' || board.getAttribute('orientation') === 'black') {
-          console.log('Chessist: Detected black via orientation property');
+          log('Chessist: Detected black via orientation property');
           return 'b';
         }
         // Or via a game property
         if (board.game?.getOrientation?.() === 'black' || board.game?.orientation === 'black') {
-          console.log('Chessist: Detected black via game orientation');
+          log('Chessist: Detected black via game orientation');
           return 'b';
         }
         // Check for board.isFlipped property
         if (board.isFlipped === true) {
-          console.log('Chessist: Detected black via isFlipped property');
+          log('Chessist: Detected black via isFlipped property');
           return 'b';
         }
       } catch (e) {
@@ -775,7 +852,7 @@
     // In puzzle mode, if board orientation checks didn't determine color,
     // use the current turn as player color (you solve for whoever's turn it is)
     if (isPuzzleMode()) {
-      console.log('Chessist: Puzzle mode - using current turn as player color:', currentTurn);
+      log('Chessist: Puzzle mode - using current turn as player color:', currentTurn);
       return currentTurn;
     }
 
@@ -908,7 +985,7 @@
     const nativeEvalInner = document.getElementById('evaluation');
 
     if (nativeEvalContainer && nativeEvalInner) {
-      console.log('Chessist: Using native Chess.com eval container');
+      log('Chessist: Using native Chess.com eval container');
 
       // Make container visible and style it
       nativeEvalContainer.style.display = 'block';
@@ -954,7 +1031,7 @@
     }
 
     // Fallback: Create our own eval bar
-    console.log('Chessist: Creating custom eval bar');
+    log('Chessist: Creating custom eval bar');
 
     // Find the actual board element with dimensions
     let boardElement = board;
@@ -1001,6 +1078,11 @@
     bestMoveEl.className = 'chess-live-eval-best-move';
     bestMoveEl.style.display = 'none';
 
+    // Create countdown display for auto-move (hidden by default)
+    countdownEl = document.createElement('div');
+    countdownEl.className = 'chess-live-eval-countdown';
+    countdownEl.style.display = 'none';
+
     // Create depth indicator
     depthEl = document.createElement('div');
     depthEl.className = 'chess-live-eval-depth';
@@ -1015,6 +1097,7 @@
     evalBar.appendChild(evalScore);
     evalBar.appendChild(depthEl);
     evalBar.appendChild(bestMoveEl);
+    evalBar.appendChild(countdownEl);
     evalBar.appendChild(turnIndicatorEl);
 
     // Insert eval bar
@@ -1154,7 +1237,7 @@
 
       // Log best move to console only at target depth
       if (evaluation.depth >= targetDepth) {
-        console.log(`Best move: ${formattedMove} (depth ${evaluation.depth}, eval: ${displayScore})`);
+        log(`Best move: ${formattedMove} (depth ${evaluation.depth}, eval: ${displayScore})`);
       }
 
       if (showBestMove && bestMoveEl) {
@@ -1203,26 +1286,100 @@
       const positionKey = currentFen ? currentFen.split(' ').slice(0, 2).join(' ') : null;
       if (isPlayerTurn && evalMatchesCurrent && positionKey && positionKey !== lastAutoMovePosition) {
         lastAutoMovePosition = positionKey;  // Mark this position+turn as processed
-        console.log('Chessist: Auto-move triggered for', evaluation.bestMove);
 
-        // Small delay to ensure the UI is ready, then re-verify before executing
-        const expectedPosition = positionKey;
-        setTimeout(() => {
-          // Final verification - position must still match (prevents race condition)
-          const board = findBoard();
-          const currentFenNow = board ? extractFEN(board) : null;
-          if (currentFenNow) {
-            const nowPosition = currentFenNow.split(' ').slice(0, 2).join(' ');
-            if (nowPosition !== expectedPosition) {
-              console.log('Chessist: Aborting auto-move - position changed during delay');
-              return;
+        // Skill-based move selection: lower skill = chance to pick suboptimal move
+        let moveToPlay = evaluation.bestMove;
+        if (skillLevel < 20 && evaluation.pv && evaluation.pv.length > 1) {
+          // At lower skill levels, sometimes pick a worse move from PV
+          // Chance to "blunder" increases as skill decreases
+          const blunderChance = (20 - skillLevel) / 25; // 0% at skill 20, 76% at skill 1
+          if (Math.random() < blunderChance) {
+            // Pick a random move from PV (weighted towards better moves)
+            const pvMoves = evaluation.pv;
+            const maxIndex = Math.min(pvMoves.length - 1, Math.ceil((20 - skillLevel) / 4));
+            const pickIndex = Math.floor(Math.random() * (maxIndex + 1));
+            if (pickIndex > 0 && pvMoves[pickIndex]) {
+              moveToPlay = pvMoves[pickIndex];
+              log('Chessist: Skill level', skillLevel, '- picking move', pickIndex + 1, 'from PV:', moveToPlay);
             }
           }
-          executeMove(evaluation.bestMove);
-        }, 150);
+        }
+
+        // Calculate random delay within configured range (convert seconds to ms)
+        const minDelayMs = autoMoveDelayMin * 1000;
+        const maxDelayMs = autoMoveDelayMax * 1000;
+        const randomDelay = Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1)) + minDelayMs;
+
+        // Execute move with or without delay based on instantMove setting
+        if (instantMove) {
+          log('Chessist: Instant auto-move for', moveToPlay);
+          hideCountdown();
+          executeMove(moveToPlay);
+        } else {
+          log('Chessist: Auto-move triggered for', moveToPlay, 'with delay', randomDelay, 'ms');
+
+          // Show countdown timer
+          const expectedPosition = positionKey;
+          startCountdown(randomDelay, expectedPosition, moveToPlay);
+        }
       } else if (!evalMatchesCurrent) {
-        console.log('Chessist: Skipping auto-move - stale evaluation for different position');
+        log('Chessist: Skipping auto-move - stale evaluation for different position');
       }
+    }
+  }
+
+  // Start countdown timer for auto-move
+  function startCountdown(delayMs, expectedPosition, moveToPlay) {
+    // Clear any existing countdown
+    hideCountdown();
+
+    const startTime = Date.now();
+    const endTime = startTime + delayMs;
+
+    // Show countdown element
+    if (countdownEl) {
+      countdownEl.style.display = 'block';
+    }
+
+    // Update countdown every 100ms
+    countdownInterval = setInterval(() => {
+      const remaining = Math.max(0, endTime - Date.now());
+      const seconds = (remaining / 1000).toFixed(1);
+
+      if (countdownEl) {
+        countdownEl.textContent = `${seconds}s`;
+      }
+
+      // Check if position changed (abort countdown)
+      const board = findBoard();
+      const currentFenNow = board ? extractFEN(board) : null;
+      if (currentFenNow) {
+        const nowPosition = currentFenNow.split(' ').slice(0, 2).join(' ');
+        if (nowPosition !== expectedPosition) {
+          log('Chessist: Position changed, cancelling countdown');
+          hideCountdown();
+          return;
+        }
+      }
+
+      // Time's up - execute the move
+      if (remaining <= 0) {
+        hideCountdown();
+        log('Chessist: Countdown complete, executing move:', moveToPlay);
+        executeMove(moveToPlay);
+      }
+    }, 100);
+  }
+
+  // Hide countdown timer
+  function hideCountdown() {
+    if (countdownInterval) {
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
+    if (countdownEl) {
+      countdownEl.style.display = 'none';
+      countdownEl.textContent = '';
     }
   }
 
@@ -1248,12 +1405,12 @@
 
     // Check if extension context is still valid
     if (!extensionContextValid || !checkExtensionContext()) {
-      console.log('Chessist: Extension context invalid, showing refresh message');
+      log('Chessist: Extension context invalid, showing refresh message');
       showRefreshMessage();
       return;
     }
 
-    console.log('Chessist: Requesting eval for FEN:', fen, isMouseRelease ? '(mouse release)' : '');
+    log('Chessist: Requesting eval for FEN:', fen, isMouseRelease ? '(mouse release)' : '');
 
     try {
       const response = await chrome.runtime.sendMessage({
@@ -1304,7 +1461,7 @@
       }
     });
   } catch (e) {
-    console.log('Chessist: Could not add message listener - context invalid');
+    log('Chessist: Could not add message listener - context invalid');
   }
 
   // Start observing board for changes
@@ -1339,7 +1496,7 @@
 
     // Method 3: Listen for mouse release on board (PRIMARY - most accurate)
     board.addEventListener('mouseup', () => {
-      console.log('Chessist: Mouse released on board');
+      log('Chessist: Mouse released on board');
       setTimeout(() => checkForPositionChange(true), 100); // Mark as mouse release
     });
 
@@ -1371,7 +1528,7 @@
     window.evalDebounce = setTimeout(() => {
       const board = findBoard();
       if (!board) {
-        console.log('Chessist: No board found');
+        log('Chessist: No board found');
         return;
       }
 
@@ -1388,7 +1545,7 @@
 
         // If we just started a new game, reset the engine
         if (isStartingPosition && !wasStartingPosition && currentFen !== null) {
-          console.log('Chessist: New game detected, resetting engine');
+          log('Chessist: New game detected, resetting engine');
           if (extensionContextValid && checkExtensionContext()) {
             chrome.runtime.sendMessage({ type: 'RESET_ENGINE' }).catch((e) => {
               if (e.message?.includes('Extension context invalidated')) {
@@ -1409,7 +1566,7 @@
 
         // Re-detect player color (in case user switched games)
         playerColor = detectPlayerColor();
-        console.log('Chessist: Turn:', currentTurn, 'Player:', playerColor || 'spectating');
+        log('Chessist: Turn:', currentTurn, 'Player:', playerColor || 'spectating');
 
         // Update turn indicator for debugging
         if (turnIndicatorEl) {
@@ -1437,7 +1594,7 @@
     if (extensionContextValid && checkExtensionContext()) {
       try {
         await chrome.runtime.sendMessage({ type: 'RESET_ENGINE' });
-        console.log('Chessist: Engine reset on page load');
+        log('Chessist: Engine reset on page load');
       } catch (e) {
         if (e.message?.includes('Extension context invalidated')) {
           extensionContextValid = false;
@@ -1505,13 +1662,13 @@
             if (autoMove) {
               lastAutoMovePosition = null;
             }
-            console.log('Chessist: Auto-move', autoMove ? 'enabled' : 'disabled');
+            log('Chessist: Auto-move', autoMove ? 'enabled' : 'disabled');
           }
           // Update playerColor if provided
           if (message.playerColor !== undefined) {
             manualPlayerColor = message.playerColor;
             playerColor = detectPlayerColor();  // Re-detect with new manual setting
-            console.log('Chessist: Player color set to', manualPlayerColor, '-> detected as', playerColor);
+            log('Chessist: Player color set to', manualPlayerColor, '-> detected as', playerColor);
             // Update turn indicator
             if (turnIndicatorEl) {
               const isMyTurn = playerColor && currentTurn === playerColor;
@@ -1522,17 +1679,38 @@
           // Update targetDepth if provided
           if (message.engineDepth !== undefined) {
             targetDepth = message.engineDepth;
-            console.log('Chessist: Target depth updated to', targetDepth);
+            log('Chessist: Target depth updated to', targetDepth);
             // Trigger re-evaluation with new depth if we have a position
             if (currentFen && isEnabled) {
               evalBar?.classList.add('loading');
               requestEval(currentFen);
             }
           }
+          // Update stealthMode if provided
+          if (message.stealthMode !== undefined) {
+            stealthMode = message.stealthMode;
+          }
+          // Update instantMove if provided
+          if (message.instantMove !== undefined) {
+            instantMove = message.instantMove;
+            log('Chessist: Instant move', instantMove ? 'enabled' : 'disabled');
+          }
+          // Update auto-move delay settings if provided
+          if (message.autoMoveDelayMin !== undefined) {
+            autoMoveDelayMin = message.autoMoveDelayMin;
+          }
+          if (message.autoMoveDelayMax !== undefined) {
+            autoMoveDelayMax = message.autoMoveDelayMax;
+          }
+          // Update skill level if provided
+          if (message.skillLevel !== undefined) {
+            skillLevel = message.skillLevel;
+            log('Chessist: Skill level updated to', skillLevel);
+          }
         } else if (message.type === 'RE_EVALUATE') {
           // Engine switched - trigger re-evaluation of current position
           if (currentFen && isEnabled) {
-            console.log('Chessist: Re-evaluating after engine switch');
+            log('Chessist: Re-evaluating after engine switch');
             evalBar?.classList.add('loading');
             requestEval(currentFen);
           }
@@ -1545,7 +1723,7 @@
       }
     });
   } catch (e) {
-    console.log('Chessist: Could not add settings listener - context invalid');
+    log('Chessist: Could not add settings listener - context invalid');
   }
 
   // Start when DOM is ready

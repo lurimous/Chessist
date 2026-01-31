@@ -437,6 +437,13 @@ function handleNativeMessage(message) {
   }
   else if (message.type === 'ready') {
     console.log('Chessist SW: Native Stockfish ready');
+    // Apply saved skill level on engine ready
+    chrome.storage.sync.get(['skillLevel']).then(settings => {
+      const level = settings.skillLevel ?? 20;
+      if (level < 20) {
+        sendToNativePort({ type: 'set_option', name: 'Skill Level', value: level });
+      }
+    });
   }
   else if (message.type === 'analyzing') {
     console.log('Chessist SW: Analyzing position:', message.fen, 'depth:', message.depth);
@@ -614,6 +621,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendToNativePort({ type: 'set_option', name: 'Depth', value: message.depth });
     }
     // WASM will read from storage
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.type === 'SET_SKILL_LEVEL') {
+    // Forward skill level to native Stockfish (UCI option)
+    if (engineSource === 'native') {
+      sendToNativePort({ type: 'set_option', name: 'Skill Level', value: message.level });
+    }
     sendResponse({ success: true });
     return true;
   }

@@ -370,6 +370,18 @@ def main():
                 start_stockfish()
                 send_message({"type": "debug", "message": "Engine reset (restarted)"})
 
+            elif msg_type == "set_option":
+                # Set UCI option (e.g., Skill Level)
+                name = message.get("name")
+                value = message.get("value")
+                if name and value is not None and stockfish_process and stockfish_process.poll() is None:
+                    try:
+                        stockfish_process.stdin.write(f"setoption name {name} value {value}\n")
+                        stockfish_process.stdin.flush()
+                        send_message({"type": "debug", "message": f"Set option {name} = {value}"})
+                    except Exception as e:
+                        send_message({"type": "error", "message": f"Failed to set option: {str(e)}"})
+
             elif msg_type == "quit":
                 break
 

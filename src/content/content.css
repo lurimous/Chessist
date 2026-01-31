@@ -86,6 +86,29 @@
   z-index: 12;
 }
 
+/* Countdown timer for auto-move - shown below best move */
+.chess-live-eval-countdown {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  color: #ff9500;
+  background: rgba(0, 0, 0, 0.9);
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  z-index: 13;
+  animation: countdown-pulse 0.5s infinite alternate;
+}
+
+@keyframes countdown-pulse {
+  0% { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
 /* Depth indicator - positioned at bottom (white area), so use black text */
 .chess-live-eval-depth {
   position: absolute;

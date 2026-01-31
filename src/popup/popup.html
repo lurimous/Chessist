@@ -43,6 +43,37 @@
         <span class="label">Auto Move</span>
       </label>
 
+      <div id="autoMoveSettings" class="auto-move-settings hidden">
+        <label class="toggle sub-toggle">
+          <input type="checkbox" id="instantMove">
+          <span class="slider"></span>
+          <span class="label">Instant Move</span>
+        </label>
+        <div class="setting-row compact" id="delaySettings">
+          <span class="setting-label">Delay (sec)</span>
+          <div class="delay-control">
+            <input type="number" id="delayMin" min="0" max="10" step="0.1" value="0.5" title="Minimum delay">
+            <span class="delay-separator">-</span>
+            <input type="number" id="delayMax" min="0" max="10" step="0.1" value="2" title="Maximum delay">
+          </div>
+        </div>
+        <div class="setting-row compact">
+          <span class="setting-label">Skill Level</span>
+          <div class="depth-control">
+            <input type="range" id="skillLevel" min="1" max="20" value="20" title="20 = best moves, lower = more mistakes">
+            <span class="depth-value" id="skillValue">20</span>
+          </div>
+        </div>
+        <p class="help-hint">Lower skill = occasional suboptimal moves</p>
+      </div>
+
+      <label class="toggle">
+        <input type="checkbox" id="stealthMode">
+        <span class="slider"></span>
+        <span class="label">Stealth Mode</span>
+      </label>
+      <p class="help-hint stealth-hint">Disables console logs</p>
+
       <div class="setting-row">
         <span class="setting-label">Analysis Depth</span>
         <div class="depth-control">

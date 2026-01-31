@@ -16,6 +16,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const copyIdBtn = document.getElementById('copyIdBtn');
   const extensionIdEl = document.getElementById('extensionId');
   const autoMoveToggle = document.getElementById('autoMove');
+  const autoMoveSettings = document.getElementById('autoMoveSettings');
+  const instantMoveToggle = document.getElementById('instantMove');
+  const delaySettings = document.getElementById('delaySettings');
+  const delayMinInput = document.getElementById('delayMin');
+  const delayMaxInput = document.getElementById('delayMax');
+  const skillLevelInput = document.getElementById('skillLevel');
+  const skillValueEl = document.getElementById('skillValue');
+  const stealthModeToggle = document.getElementById('stealthMode');
   const colorAutoBtn = document.getElementById('colorAuto');
   const colorWhiteBtn = document.getElementById('colorWhite');
   const colorBlackBtn = document.getElementById('colorBlack');
@@ -30,14 +38,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   extensionIdEl.title = 'Click to copy extension ID';
 
   // Load current settings
-  const settings = await chrome.storage.sync.get(['enabled', 'showBestMove', 'autoMove', 'engineDepth', 'engineSource', 'playerColor']);
+  const settings = await chrome.storage.sync.get([
+    'enabled', 'showBestMove', 'autoMove', 'instantMove', 'stealthMode', 'engineDepth',
+    'engineSource', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
+  ]);
   enableToggle.checked = settings.enabled !== false;
   showBestMove.checked = settings.showBestMove === true;
   autoMoveToggle.checked = settings.autoMove === true;
+  stealthModeToggle.checked = settings.stealthMode === true;
   engineDepth.value = settings.engineDepth || 18;
   depthValue.textContent = engineDepth.value;
   currentEngineSource = settings.engineSource || 'wasm';
   currentPlayerColor = settings.playerColor || 'auto';
+
+  // Auto-move settings
+  instantMoveToggle.checked = settings.instantMove === true;
+  delayMinInput.value = settings.autoMoveDelayMin ?? 0.5;
+  delayMaxInput.value = settings.autoMoveDelayMax ?? 2;
+  skillLevelInput.value = settings.skillLevel ?? 20;
+  skillValueEl.textContent = skillLevelInput.value;
+
+  // Show auto-move settings panel if auto-move is enabled
+  if (autoMoveToggle.checked) {
+    autoMoveSettings.classList.remove('hidden');
+  }
+
+  // Update delay settings visibility based on instant move setting
+  updateDelaySettingsVisibility();
 
   // Update button states
   updateEngineButtons();
@@ -70,7 +97,83 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Toggle auto move
   autoMoveToggle.addEventListener('change', async () => {
     await chrome.storage.sync.set({ autoMove: autoMoveToggle.checked });
+    // Show/hide auto-move settings panel
+    if (autoMoveToggle.checked) {
+      autoMoveSettings.classList.remove('hidden');
+    } else {
+      autoMoveSettings.classList.add('hidden');
+    }
     notifyContentScripts({ type: 'SETTINGS_UPDATED', autoMove: autoMoveToggle.checked });
+  });
+
+  // Toggle instant move
+  instantMoveToggle.addEventListener('change', async () => {
+    await chrome.storage.sync.set({ instantMove: instantMoveToggle.checked });
+    updateDelaySettingsVisibility();
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', instantMove: instantMoveToggle.checked });
+  });
+
+  // Update delay settings visibility based on instant move
+  function updateDelaySettingsVisibility() {
+    if (instantMoveToggle.checked) {
+      delaySettings.classList.add('disabled');
+    } else {
+      delaySettings.classList.remove('disabled');
+    }
+  }
+
+  // Auto-move delay settings
+  delayMinInput.addEventListener('change', async () => {
+    const min = parseFloat(delayMinInput.value) || 0;
+    const max = parseFloat(delayMaxInput.value) || 2;
+    // Ensure min <= max
+    if (min > max) {
+      delayMinInput.value = max;
+    }
+    await chrome.storage.sync.set({ autoMoveDelayMin: parseFloat(delayMinInput.value) });
+    notifyContentScripts({
+      type: 'SETTINGS_UPDATED',
+      autoMoveDelayMin: parseFloat(delayMinInput.value),
+      autoMoveDelayMax: max
+    });
+  });
+
+  delayMaxInput.addEventListener('change', async () => {
+    const min = parseFloat(delayMinInput.value) || 0;
+    const max = parseFloat(delayMaxInput.value) || 2;
+    // Ensure max >= min
+    if (max < min) {
+      delayMaxInput.value = min;
+    }
+    await chrome.storage.sync.set({ autoMoveDelayMax: parseFloat(delayMaxInput.value) });
+    notifyContentScripts({
+      type: 'SETTINGS_UPDATED',
+      autoMoveDelayMin: min,
+      autoMoveDelayMax: parseFloat(delayMaxInput.value)
+    });
+  });
+
+  // Skill level slider
+  skillLevelInput.addEventListener('input', () => {
+    skillValueEl.textContent = skillLevelInput.value;
+  });
+
+  skillLevelInput.addEventListener('change', async () => {
+    const level = parseInt(skillLevelInput.value);
+    await chrome.storage.sync.set({ skillLevel: level });
+    // Send to service worker to update native engine's Skill Level UCI option
+    try {
+      await chrome.runtime.sendMessage({ type: 'SET_SKILL_LEVEL', level: level });
+    } catch (e) {
+      // Service worker might not be ready
+    }
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', skillLevel: level });
+  });
+
+  // Toggle stealth mode
+  stealthModeToggle.addEventListener('change', async () => {
+    await chrome.storage.sync.set({ stealthMode: stealthModeToggle.checked });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', stealthMode: stealthModeToggle.checked });
   });
 
   // Engine depth slider
