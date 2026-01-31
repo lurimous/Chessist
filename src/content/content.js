@@ -999,7 +999,7 @@
       // Create fill (white portion)
       evalBarFill = document.createElement('div');
       evalBarFill.className = 'chess-live-eval-bar-fill';
-      evalBarFill.style.height = '50%';
+      evalBarFill.style.setProperty('height', '50%', 'important');
 
       // Create score display
       evalScore = document.createElement('div');
@@ -1010,6 +1010,11 @@
       bestMoveEl = document.createElement('div');
       bestMoveEl.className = 'chess-live-eval-best-move';
       bestMoveEl.style.display = 'none';
+
+      // Create countdown display for auto-move (hidden by default)
+      countdownEl = document.createElement('div');
+      countdownEl.className = 'chess-live-eval-countdown';
+      countdownEl.style.display = 'none';
 
       // Create depth indicator
       depthEl = document.createElement('div');
@@ -1025,6 +1030,7 @@
       evalBar.appendChild(evalScore);
       evalBar.appendChild(depthEl);
       evalBar.appendChild(bestMoveEl);
+      evalBar.appendChild(countdownEl);
       evalBar.appendChild(turnIndicatorEl);
 
       return;
@@ -1066,7 +1072,7 @@
     // Create fill (white portion)
     evalBarFill = document.createElement('div');
     evalBarFill.className = 'chess-live-eval-bar-fill';
-    evalBarFill.style.height = '50%';
+    evalBarFill.style.setProperty('height', '50%', 'important');
 
     // Create score display
     evalScore = document.createElement('div');
@@ -1216,8 +1222,8 @@
       fillPercent = 50 + (clampedPawns / 10) * 50;
     }
 
-    // Update bar fill
-    evalBarFill.style.height = `${fillPercent}%`;
+    // Update bar fill (use setProperty for higher priority over CSS)
+    evalBarFill.style.setProperty('height', `${fillPercent}%`, 'important');
 
     // Update score display
     evalScore.textContent = displayScore;

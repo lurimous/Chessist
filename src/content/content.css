@@ -28,13 +28,26 @@
 }
 
 .chess-live-eval-bar-fill {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: #fff;
-  transition: height 0.3s ease-out;
-  border-radius: 0 0 4px 4px;
+  position: absolute !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+  background: #fff !important;
+  transition: height 0.3s ease-out !important;
+  border-radius: 0 0 4px 4px !important;
+  z-index: 1 !important;
+}
+
+/* Ensure fill shows in native Chess.com container */
+#evaluation .chess-live-eval-bar-fill {
+  position: absolute !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+  background: #fff !important;
+  z-index: 1 !important;
 }
 
 .chess-live-eval-score {
