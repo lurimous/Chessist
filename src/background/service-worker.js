@@ -634,6 +634,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'STOP_ANALYSIS') {
+    // Stop current analysis (but don't reset caches)
+    if (engineSource === 'native') {
+      sendToNativePort({ type: 'stop' });
+    } else {
+      // Send stop to offscreen document
+      chrome.runtime.sendMessage({ type: 'STOP' }).catch(() => {});
+    }
+    // Clear the current analysis FEN to ignore incoming results
+    analysisEvalFen = null;
+    console.log('Chessist SW: Analysis stopped');
+    sendResponse({ success: true });
+    return true;
+  }
+
   if (message.type === 'RESET_ENGINE') {
     // Reset the engine (clear hash tables, stop analysis)
     if (engineSource === 'native') {

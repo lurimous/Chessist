@@ -27,6 +27,7 @@
   let targetDepth = 18; // Default depth
   let stealthMode = false; // Disable console logging when true
   let instantMove = false; // Make moves instantly without delay
+  let smartTiming = true; // Adjust delay based on move complexity
   let autoMoveDelayMin = 0.5; // Minimum delay in seconds before auto-move
   let autoMoveDelayMax = 2; // Maximum delay in seconds before auto-move
   let skillLevel = 20; // Stockfish skill level (1-20, 20 = best)
@@ -54,13 +55,14 @@
   async function loadSettings() {
     try {
       const result = await chrome.storage.sync.get([
-        'enabled', 'showBestMove', 'autoMove', 'instantMove', 'stealthMode', 'engineDepth', 'playerColor',
+        'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'stealthMode', 'engineDepth', 'playerColor',
         'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
       ]);
       isEnabled = result.enabled !== false; // Default true
       showBestMove = result.showBestMove === true; // Default false
       autoMove = result.autoMove === true; // Default false
       instantMove = result.instantMove === true; // Default false
+      smartTiming = result.smartTiming !== false; // Default true
       stealthMode = result.stealthMode === true; // Default false
       targetDepth = result.engineDepth || 18;
       manualPlayerColor = result.playerColor || 'auto';
@@ -1225,6 +1227,11 @@
     // Update bar fill (use setProperty for higher priority over CSS)
     evalBarFill.style.setProperty('height', `${fillPercent}%`, 'important');
 
+    // Flip bar colors when playing as black (so player's color is at bottom)
+    if (evalBar) {
+      evalBar.classList.toggle('flipped', viewFromBlack);
+    }
+
     // Update score display
     evalScore.textContent = displayScore;
     evalScore.className = `chess-live-eval-score ${scoreClass}`;
@@ -1311,10 +1318,26 @@
           }
         }
 
-        // Calculate random delay within configured range (convert seconds to ms)
+        // Calculate delay based on settings
         const minDelayMs = autoMoveDelayMin * 1000;
         const maxDelayMs = autoMoveDelayMax * 1000;
-        const randomDelay = Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1)) + minDelayMs;
+        const delayRange = maxDelayMs - minDelayMs;
+        let finalDelay;
+
+        if (smartTiming) {
+          // Smart timing: adjust delay based on move complexity
+          const complexity = calculateMoveComplexity(moveToPlay, evaluation, currentFen);
+          // complexity 0.0 = delay near min, complexity 1.0 = delay near max
+          const baseDelay = minDelayMs + (delayRange * complexity);
+          // Add ±20% randomness to feel more human
+          const randomFactor = 0.8 + (Math.random() * 0.4);
+          finalDelay = Math.floor(baseDelay * randomFactor);
+          log('Chessist: Move complexity:', complexity.toFixed(2), '-> delay:', finalDelay, 'ms');
+        } else {
+          // Simple random delay within range
+          finalDelay = Math.floor(Math.random() * (delayRange + 1)) + minDelayMs;
+          log('Chessist: Random delay:', finalDelay, 'ms');
+        }
 
         // Execute move with or without delay based on instantMove setting
         if (instantMove) {
@@ -1322,16 +1345,87 @@
           hideCountdown();
           executeMove(moveToPlay);
         } else {
-          log('Chessist: Auto-move triggered for', moveToPlay, 'with delay', randomDelay, 'ms');
+          log('Chessist: Auto-move triggered for', moveToPlay, 'with delay', finalDelay, 'ms');
 
           // Show countdown timer
           const expectedPosition = positionKey;
-          startCountdown(randomDelay, expectedPosition, moveToPlay);
+          startCountdown(finalDelay, expectedPosition, moveToPlay);
         }
       } else if (!evalMatchesCurrent) {
         log('Chessist: Skipping auto-move - stale evaluation for different position');
       }
     }
+  }
+
+  // Calculate move complexity (0.0 = simple/obvious, 1.0 = complex/hard to find)
+  function calculateMoveComplexity(move, evaluation, fen) {
+    let complexity = 0.5; // Default: medium complexity
+
+    // Factor 1: Is it a capture? Captures are often more obvious (especially recaptures)
+    // Check if target square has a piece by parsing FEN
+    if (fen && move.length >= 4) {
+      const toSquare = move.substring(2, 4);
+      const toFile = toSquare.charCodeAt(0) - 97; // a=0, h=7
+      const toRank = parseInt(toSquare[1]) - 1;   // 1=0, 8=7
+
+      // Parse FEN to check if target square has a piece
+      const fenBoard = fen.split(' ')[0];
+      const rows = fenBoard.split('/');
+      if (rows.length === 8) {
+        const row = rows[7 - toRank]; // FEN rows are from rank 8 to 1
+        let fileIndex = 0;
+        for (const char of row) {
+          if (fileIndex === toFile) {
+            // If it's a piece (not a number), it's a capture
+            if (isNaN(parseInt(char))) {
+              complexity -= 0.2; // Captures are more obvious
+            }
+            break;
+          }
+          if (isNaN(parseInt(char))) {
+            fileIndex++;
+          } else {
+            fileIndex += parseInt(char);
+          }
+        }
+      }
+    }
+
+    // Factor 2: Evaluation magnitude - very winning/losing positions have obvious moves
+    const evalCp = Math.abs(evaluation.cp || 0);
+    const evalMate = evaluation.mate;
+
+    if (evalMate !== undefined) {
+      // Mate in X - usually forced/obvious
+      complexity -= 0.3;
+    } else if (evalCp > 500) {
+      // Winning by 5+ pawns - position is usually decided, moves are simpler
+      complexity -= 0.2;
+    } else if (evalCp > 200) {
+      // Winning by 2+ pawns - still fairly clear
+      complexity -= 0.1;
+    } else if (evalCp < 50) {
+      // Equal position - most complex, many viable options
+      complexity += 0.2;
+    }
+
+    // Factor 3: Check if it's a promotion (often obvious in endgames)
+    if (move.length > 4) {
+      complexity -= 0.15;
+    }
+
+    // Factor 4: PV length - longer PV might indicate more forcing sequence
+    if (evaluation.pv && evaluation.pv.length > 0) {
+      // If first few moves of PV are forced (captures, checks), position is sharper
+      const pvLength = evaluation.pv.length;
+      if (pvLength >= 6) {
+        // Deep forcing line found - position is tactical but move is clear
+        complexity -= 0.1;
+      }
+    }
+
+    // Clamp to 0.0 - 1.0 range
+    return Math.max(0.0, Math.min(1.0, complexity));
   }
 
   // Start countdown timer for auto-move
@@ -1584,8 +1678,22 @@
           turnIndicatorEl.className = `chess-live-eval-turn ${isMyTurn ? 'my-turn' : ''}`;
         }
 
-        evalBar?.classList.add('loading');
-        requestEval(newFen, isMouseRelease);
+        // Check if it's the player's turn (or spectating mode)
+        const isMyTurn = !playerColor || currentTurn === playerColor;
+
+        if (isMyTurn) {
+          // Player's turn - request evaluation
+          evalBar?.classList.add('loading');
+          requestEval(newFen, isMouseRelease);
+        } else {
+          // Opponent's turn - stop any ongoing analysis to save resources
+          hideCountdown();
+          evalBar?.classList.remove('loading');
+          if (extensionContextValid && checkExtensionContext()) {
+            chrome.runtime.sendMessage({ type: 'STOP_ANALYSIS' }).catch(() => {});
+          }
+          log('Chessist: Opponent turn - skipping evaluation');
+        }
       }
     }, isMouseRelease ? 50 : 200); // Shorter debounce for mouse release
   }
@@ -1700,6 +1808,10 @@
           if (message.instantMove !== undefined) {
             instantMove = message.instantMove;
             log('Chessist: Instant move', instantMove ? 'enabled' : 'disabled');
+          }
+          if (message.smartTiming !== undefined) {
+            smartTiming = message.smartTiming;
+            log('Chessist: Smart timing', smartTiming ? 'enabled' : 'disabled');
           }
           // Update auto-move delay settings if provided
           if (message.autoMoveDelayMin !== undefined) {

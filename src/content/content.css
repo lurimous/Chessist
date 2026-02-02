@@ -50,9 +50,27 @@
   z-index: 1 !important;
 }
 
+/* Flipped bar colors when playing as black (player's color at bottom) */
+.chess-live-eval-bar.flipped {
+  background: #fff !important;
+}
+
+.chess-live-eval-bar.flipped .chess-live-eval-bar-fill {
+  background: #000 !important;
+}
+
+#evaluation.chess-live-eval-bar.flipped {
+  background: #fff !important;
+}
+
+#evaluation.chess-live-eval-bar.flipped .chess-live-eval-bar-fill {
+  background: #000 !important;
+}
+
 .chess-live-eval-score {
   position: absolute;
   left: 50%;
+  bottom: 18px;
   transform: translateX(-50%);
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   font-size: 11px;
@@ -61,25 +79,14 @@
   border-radius: 3px;
   white-space: nowrap;
   z-index: 10;
-}
-
-.chess-live-eval-score.white-winning {
-  bottom: 12px;
   color: #000;
-  text-shadow: 0 0 3px rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.85);
 }
 
-.chess-live-eval-score.black-winning {
-  top: 8px;
+/* When flipped (playing as black), adjust score background for contrast */
+.chess-live-eval-bar.flipped .chess-live-eval-score {
   color: #fff;
-  text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
-}
-
-.chess-live-eval-score.equal {
-  top: 50%;
-  transform: translate(-50%, -50%);
-  color: #fff;
-  text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+  background: rgba(0, 0, 0, 0.85);
 }
 
 /* Best move indicator - shown at top of bar (black area) */
@@ -134,6 +141,11 @@
   color: rgba(0, 0, 0, 0.7);
   white-space: nowrap;
   z-index: 11;
+}
+
+/* When flipped (playing as black), depth is on black background - use white text */
+.chess-live-eval-bar.flipped .chess-live-eval-depth {
+  color: rgba(255, 255, 255, 0.8);
 }
 
 /* Mate indicator */

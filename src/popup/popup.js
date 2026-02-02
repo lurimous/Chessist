@@ -21,6 +21,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const delaySettings = document.getElementById('delaySettings');
   const delayMinInput = document.getElementById('delayMin');
   const delayMaxInput = document.getElementById('delayMax');
+  const smartTimingToggle = document.getElementById('smartTiming');
+  const smartTimingContainer = document.getElementById('smartTimingToggle');
   const skillLevelInput = document.getElementById('skillLevel');
   const skillValueEl = document.getElementById('skillValue');
   const stealthModeToggle = document.getElementById('stealthMode');
@@ -31,6 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let currentEngineSource = 'wasm';
   let currentPlayerColor = 'auto'; // 'auto', 'w', or 'b'
+  let lastReceivedEvaluation = null; // Store last eval to refresh on color change
 
   // Display the extension ID for native host setup
   const extensionId = chrome.runtime.id;
@@ -39,7 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load current settings
   const settings = await chrome.storage.sync.get([
-    'enabled', 'showBestMove', 'autoMove', 'instantMove', 'stealthMode', 'engineDepth',
+    'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'stealthMode', 'engineDepth',
     'engineSource', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
   ]);
   enableToggle.checked = settings.enabled !== false;
@@ -53,6 +56,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Auto-move settings
   instantMoveToggle.checked = settings.instantMove === true;
+  smartTimingToggle.checked = settings.smartTiming !== false; // Default true
   delayMinInput.value = settings.autoMoveDelayMin ?? 0.5;
   delayMaxInput.value = settings.autoMoveDelayMax ?? 2;
   skillLevelInput.value = settings.skillLevel ?? 20;
@@ -75,6 +79,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const response = await chrome.runtime.sendMessage({ type: 'GET_LAST_EVAL' });
     if (response?.evaluation) {
+      lastReceivedEvaluation = response.evaluation;
       updateEvalDisplay(response.evaluation);
     }
   } catch (e) {
@@ -117,10 +122,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   function updateDelaySettingsVisibility() {
     if (instantMoveToggle.checked) {
       delaySettings.classList.add('disabled');
+      smartTimingContainer.classList.add('disabled');
     } else {
       delaySettings.classList.remove('disabled');
+      smartTimingContainer.classList.remove('disabled');
     }
   }
+
+  // Toggle smart timing
+  smartTimingToggle.addEventListener('change', async () => {
+    await chrome.storage.sync.set({ smartTiming: smartTimingToggle.checked });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', smartTiming: smartTimingToggle.checked });
+  });
 
   // Auto-move delay settings
   delayMinInput.addEventListener('change', async () => {
@@ -211,6 +224,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     await chrome.storage.sync.set({ playerColor: color });
     updateColorButtons();
     notifyContentScripts({ type: 'SETTINGS_UPDATED', playerColor: color });
+    // Refresh eval display with new perspective
+    if (lastReceivedEvaluation) {
+      updateEvalDisplay(lastReceivedEvaluation);
+    }
   }
 
   function updateColorButtons() {
@@ -382,6 +399,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Listen for eval updates and engine source changes
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'EVAL_RESULT' && message.evaluation) {
+      lastReceivedEvaluation = message.evaluation;
       updateEvalDisplay(message.evaluation);
     }
     // Handle auto-fallback from native to WASM (e.g., Opera browser)
@@ -408,12 +426,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     let depthText = '';
     let className = '';
 
-    if (evaluation.mate !== undefined) {
-      const mateIn = evaluation.mate;
-      displayText = mateIn > 0 ? `M${mateIn}` : `-M${Math.abs(mateIn)}`;
-      className = mateIn > 0 ? 'positive' : 'negative';
-    } else if (evaluation.cp !== undefined) {
-      const pawns = evaluation.cp / 100;
+    // Step 1: Normalize to white's perspective (positive = white winning)
+    // Stockfish gives score from side-to-move's perspective
+    const isBlackToMove = evaluation.turn === 'b';
+    let normalizedMate = evaluation.mate;
+    let normalizedCp = evaluation.cp || 0;
+
+    if (isBlackToMove) {
+      // Flip to white's perspective
+      if (normalizedMate !== undefined) {
+        normalizedMate = -normalizedMate;
+      }
+      normalizedCp = -normalizedCp;
+    }
+
+    // Step 2: Flip to player's perspective if playing as black
+    // (currentPlayerColor is 'auto', 'w', or 'b')
+    const viewFromBlack = currentPlayerColor === 'b';
+    let displayMate = normalizedMate;
+    let displayCp = normalizedCp;
+
+    if (viewFromBlack) {
+      if (displayMate !== undefined) {
+        displayMate = -displayMate;
+      }
+      displayCp = -displayCp;
+    }
+
+    if (displayMate !== undefined) {
+      displayText = displayMate > 0 ? `M${displayMate}` : `-M${Math.abs(displayMate)}`;
+      className = displayMate > 0 ? 'positive' : 'negative';
+    } else if (displayCp !== undefined) {
+      const pawns = displayCp / 100;
       if (pawns > 0) {
         displayText = `+${pawns.toFixed(1)}`;
         className = 'positive';

@@ -531,8 +531,14 @@ input[type="range"]::-webkit-slider-thumb {
   margin-left: 36px;
 }
 
-/* Delay settings hide when instant move is enabled */
-#delaySettings.disabled {
+/* Delay settings and smart timing hide when instant move is enabled */
+#delaySettings.disabled,
+#smartTimingToggle.disabled {
   opacity: 0.5;
   pointer-events: none;
+}
+
+.help-hint.smart-hint {
+  margin-top: 0;
+  margin-bottom: 4px;
 }
