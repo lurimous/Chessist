@@ -364,11 +364,24 @@ def main():
                         pass
 
             elif msg_type == "reset":
-                # Full reset - kill and restart Stockfish (clears hash table)
+                # Full reset - send ucinewgame to clear hash table
                 stop_requested = True
-                kill_stockfish()
-                start_stockfish()
-                send_message({"type": "debug", "message": "Engine reset (restarted)"})
+                analysis_in_progress = False
+                if stockfish_process and stockfish_process.poll() is None:
+                    try:
+                        stockfish_process.stdin.write("stop\n")
+                        stockfish_process.stdin.write("ucinewgame\n")
+                        stockfish_process.stdin.write("isready\n")
+                        stockfish_process.stdin.flush()
+                        send_message({"type": "debug", "message": "Engine reset (ucinewgame)"})
+                    except Exception:
+                        # If pipe fails, do a full restart
+                        kill_stockfish()
+                        start_stockfish()
+                        send_message({"type": "debug", "message": "Engine reset (restarted)"})
+                else:
+                    start_stockfish()
+                    send_message({"type": "debug", "message": "Engine reset (restarted)"})
 
             elif msg_type == "set_option":
                 # Set UCI option (e.g., Skill Level)

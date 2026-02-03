@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const smartTimingContainer = document.getElementById('smartTimingToggle');
   const skillLevelInput = document.getElementById('skillLevel');
   const skillValueEl = document.getElementById('skillValue');
+  const autoRematchToggle = document.getElementById('autoRematch');
   const stealthModeToggle = document.getElementById('stealthMode');
   const colorAutoBtn = document.getElementById('colorAuto');
   const colorWhiteBtn = document.getElementById('colorWhite');
@@ -42,12 +43,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load current settings
   const settings = await chrome.storage.sync.get([
-    'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'stealthMode', 'engineDepth',
-    'engineSource', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
+    'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch',
+    'stealthMode', 'engineDepth', 'engineSource', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
   ]);
   enableToggle.checked = settings.enabled !== false;
   showBestMove.checked = settings.showBestMove === true;
   autoMoveToggle.checked = settings.autoMove === true;
+  autoRematchToggle.checked = settings.autoRematch === true;
   stealthModeToggle.checked = settings.stealthMode === true;
   engineDepth.value = settings.engineDepth || 18;
   depthValue.textContent = engineDepth.value;
@@ -181,6 +183,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Service worker might not be ready
     }
     notifyContentScripts({ type: 'SETTINGS_UPDATED', skillLevel: level });
+  });
+
+  // Toggle auto rematch
+  autoRematchToggle.addEventListener('change', async () => {
+    await chrome.storage.sync.set({ autoRematch: autoRematchToggle.checked });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', autoRematch: autoRematchToggle.checked });
   });
 
   // Toggle stealth mode

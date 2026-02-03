@@ -28,6 +28,7 @@
   let stealthMode = false; // Disable console logging when true
   let instantMove = false; // Make moves instantly without delay
   let smartTiming = true; // Adjust delay based on move complexity
+  let autoRematch = false; // Auto click rematch/new game
   let autoMoveDelayMin = 0.5; // Minimum delay in seconds before auto-move
   let autoMoveDelayMax = 2; // Maximum delay in seconds before auto-move
   let skillLevel = 20; // Stockfish skill level (1-20, 20 = best)
@@ -55,14 +56,15 @@
   async function loadSettings() {
     try {
       const result = await chrome.storage.sync.get([
-        'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'stealthMode', 'engineDepth', 'playerColor',
-        'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
+        'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch',
+        'stealthMode', 'engineDepth', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
       ]);
       isEnabled = result.enabled !== false; // Default true
       showBestMove = result.showBestMove === true; // Default false
       autoMove = result.autoMove === true; // Default false
       instantMove = result.instantMove === true; // Default false
       smartTiming = result.smartTiming !== false; // Default true
+      autoRematch = result.autoRematch === true; // Default false
       stealthMode = result.stealthMode === true; // Default false
       targetDepth = result.engineDepth || 18;
       manualPlayerColor = result.playerColor || 'auto';
@@ -214,7 +216,7 @@
     line.setAttribute('y1', from.y.toFixed(2));
     line.setAttribute('x2', lineEndX.toFixed(2));
     line.setAttribute('y2', lineEndY.toFixed(2));
-    line.setAttribute('stroke', '#3b93e8');
+    line.setAttribute('stroke', '#792A9E');
     line.setAttribute('stroke-width', strokeWidth);
     line.setAttribute('stroke-linecap', 'round');
     line.setAttribute('opacity', '0.85');
@@ -241,7 +243,7 @@
       ${(headBaseX + perpX).toFixed(2)},${(headBaseY + perpY).toFixed(2)}
       ${(headBaseX - perpX).toFixed(2)},${(headBaseY - perpY).toFixed(2)}
     `);
-    arrowHead.setAttribute('fill', '#3b93e8');
+    arrowHead.setAttribute('fill', '#792A9E');
     arrowHead.setAttribute('opacity', '0.85');
 
     group.appendChild(line);
@@ -1643,9 +1645,12 @@
         const isStartingPosition = newFen.startsWith('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR');
         const wasStartingPosition = currentFen && currentFen.startsWith('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR');
 
-        // If we just started a new game, reset the engine
-        if (isStartingPosition && !wasStartingPosition && currentFen !== null) {
+        // If we just started a new game, reset the engine and auto-move state
+        const isNewGame = isStartingPosition && !wasStartingPosition && currentFen !== null;
+        if (isNewGame) {
           log('Chessist: New game detected, resetting engine');
+          lastAutoMovePosition = null; // Reset so first move can trigger
+          hideCountdown();
           if (extensionContextValid && checkExtensionContext()) {
             chrome.runtime.sendMessage({ type: 'RESET_ENGINE' }).catch((e) => {
               if (e.message?.includes('Extension context invalidated')) {
@@ -1683,8 +1688,10 @@
 
         if (isMyTurn) {
           // Player's turn - request evaluation
+          // Delay slightly after new game reset so engine is ready
+          const evalDelay = isNewGame ? 500 : 0;
           evalBar?.classList.add('loading');
-          requestEval(newFen, isMouseRelease);
+          setTimeout(() => requestEval(newFen, isMouseRelease), evalDelay);
         } else {
           // Opponent's turn - stop any ongoing analysis to save resources
           hideCountdown();
@@ -1738,12 +1745,48 @@
         createEvalBar(board);
         observeBoard(board);
       }
+
+      // Auto rematch: detect game-over buttons and click rematch/new game
+      if (autoRematch) {
+        checkAutoRematch();
+      }
     });
 
     pageObserver.observe(document.body, {
       childList: true,
       subtree: true
     });
+  }
+
+  // Auto rematch: click rematch or new game button when game ends
+  let autoRematchPending = false;
+  function checkAutoRematch() {
+    if (autoRematchPending) return;
+
+    // Look for game-over buttons
+    const rematchBtn = document.querySelector('[data-cy="game-over-modal-rematch-button"]');
+    const newGameBtn = document.querySelector('[data-cy="game-over-modal-new-game-button"]');
+
+    const targetBtn = rematchBtn || newGameBtn;
+    if (targetBtn) {
+      autoRematchPending = true;
+      const btnName = rematchBtn ? 'Rematch' : 'New Game';
+
+      // Random delay 1-3s to look human
+      const delay = 1000 + Math.floor(Math.random() * 2000);
+      log('Chessist: Game over detected, clicking', btnName, 'in', delay, 'ms');
+
+      setTimeout(() => {
+        // Re-check button still exists (modal might have closed)
+        const btn = document.querySelector('[data-cy="game-over-modal-rematch-button"]') ||
+                    document.querySelector('[data-cy="game-over-modal-new-game-button"]');
+        if (btn && autoRematch) {
+          btn.click();
+          log('Chessist: Clicked', btnName);
+        }
+        autoRematchPending = false;
+      }, delay);
+    }
   }
 
   // Listen for messages from popup/background
@@ -1812,6 +1855,10 @@
           if (message.smartTiming !== undefined) {
             smartTiming = message.smartTiming;
             log('Chessist: Smart timing', smartTiming ? 'enabled' : 'disabled');
+          }
+          if (message.autoRematch !== undefined) {
+            autoRematch = message.autoRematch;
+            log('Chessist: Auto rematch', autoRematch ? 'enabled' : 'disabled');
           }
           // Update auto-move delay settings if provided
           if (message.autoMoveDelayMin !== undefined) {
