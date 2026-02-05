@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const skillLevelInput = document.getElementById('skillLevel');
   const skillValueEl = document.getElementById('skillValue');
   const autoRematchToggle = document.getElementById('autoRematch');
+  const autoNewGameToggle = document.getElementById('autoNewGame');
   const stealthModeToggle = document.getElementById('stealthMode');
   const colorAutoBtn = document.getElementById('colorAuto');
   const colorWhiteBtn = document.getElementById('colorWhite');
@@ -43,13 +44,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load current settings
   const settings = await chrome.storage.sync.get([
-    'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch',
+    'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch', 'autoNewGame',
     'stealthMode', 'engineDepth', 'engineSource', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
   ]);
-  enableToggle.checked = settings.enabled !== false;
+  let isEnabled = settings.enabled !== false;
+  if (isEnabled) {
+    enableToggle.classList.add('active');
+    enableToggle.textContent = 'Enabled';
+  } else {
+    enableToggle.classList.remove('active');
+    enableToggle.textContent = 'Disabled';
+  }
   showBestMove.checked = settings.showBestMove === true;
   autoMoveToggle.checked = settings.autoMove === true;
   autoRematchToggle.checked = settings.autoRematch === true;
+  autoNewGameToggle.checked = settings.autoNewGame === true;
   stealthModeToggle.checked = settings.stealthMode === true;
   engineDepth.value = settings.engineDepth || 18;
   depthValue.textContent = engineDepth.value;
@@ -89,10 +98,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Toggle enabled state
-  enableToggle.addEventListener('change', async () => {
-    const enabled = enableToggle.checked;
-    await chrome.storage.sync.set({ enabled });
-    notifyContentScripts({ type: 'TOGGLE_ENABLED', enabled });
+  enableToggle.addEventListener('click', async () => {
+    isEnabled = !isEnabled;
+    enableToggle.classList.toggle('active', isEnabled);
+    enableToggle.textContent = isEnabled ? 'Enabled' : 'Disabled';
+    await chrome.storage.sync.set({ enabled: isEnabled });
+    notifyContentScripts({ type: 'TOGGLE_ENABLED', enabled: isEnabled });
   });
 
   // Toggle best move
@@ -185,10 +196,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     notifyContentScripts({ type: 'SETTINGS_UPDATED', skillLevel: level });
   });
 
-  // Toggle auto rematch
+  // Toggle auto rematch (mutually exclusive with auto new game)
   autoRematchToggle.addEventListener('change', async () => {
-    await chrome.storage.sync.set({ autoRematch: autoRematchToggle.checked });
-    notifyContentScripts({ type: 'SETTINGS_UPDATED', autoRematch: autoRematchToggle.checked });
+    if (autoRematchToggle.checked) {
+      autoNewGameToggle.checked = false;
+      await chrome.storage.sync.set({ autoRematch: true, autoNewGame: false });
+      notifyContentScripts({ type: 'SETTINGS_UPDATED', autoRematch: true, autoNewGame: false });
+    } else {
+      await chrome.storage.sync.set({ autoRematch: false });
+      notifyContentScripts({ type: 'SETTINGS_UPDATED', autoRematch: false });
+    }
+  });
+
+  // Toggle auto new game (mutually exclusive with auto rematch)
+  autoNewGameToggle.addEventListener('change', async () => {
+    if (autoNewGameToggle.checked) {
+      autoRematchToggle.checked = false;
+      await chrome.storage.sync.set({ autoNewGame: true, autoRematch: false });
+      notifyContentScripts({ type: 'SETTINGS_UPDATED', autoNewGame: true, autoRematch: false });
+    } else {
+      await chrome.storage.sync.set({ autoNewGame: false });
+      notifyContentScripts({ type: 'SETTINGS_UPDATED', autoNewGame: false });
+    }
   });
 
   // Toggle stealth mode

@@ -17,6 +17,14 @@
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="ss1.png" alt="Chessist eval bar and settings popup" width="700">
+  <br><br>
+  <img src="ss2.png" alt="Chessist in a live game with native engine" width="700">
+</p>
+
 ## Features
 
 - Real-time position evaluation displayed as a vertical bar

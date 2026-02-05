@@ -28,7 +28,8 @@
   let stealthMode = false; // Disable console logging when true
   let instantMove = false; // Make moves instantly without delay
   let smartTiming = true; // Adjust delay based on move complexity
-  let autoRematch = false; // Auto click rematch/new game
+  let autoRematch = false; // Auto click rematch
+  let autoNewGame = false; // Auto click new game
   let autoMoveDelayMin = 0.5; // Minimum delay in seconds before auto-move
   let autoMoveDelayMax = 2; // Maximum delay in seconds before auto-move
   let skillLevel = 20; // Stockfish skill level (1-20, 20 = best)
@@ -56,7 +57,7 @@
   async function loadSettings() {
     try {
       const result = await chrome.storage.sync.get([
-        'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch',
+        'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch', 'autoNewGame',
         'stealthMode', 'engineDepth', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
       ]);
       isEnabled = result.enabled !== false; // Default true
@@ -65,6 +66,7 @@
       instantMove = result.instantMove === true; // Default false
       smartTiming = result.smartTiming !== false; // Default true
       autoRematch = result.autoRematch === true; // Default false
+      autoNewGame = result.autoNewGame === true; // Default false
       stealthMode = result.stealthMode === true; // Default false
       targetDepth = result.engineDepth || 18;
       manualPlayerColor = result.playerColor || 'auto';
@@ -1692,6 +1694,21 @@
           const evalDelay = isNewGame ? 500 : 0;
           evalBar?.classList.add('loading');
           setTimeout(() => requestEval(newFen, isMouseRelease), evalDelay);
+
+          // For new games as white: schedule a retry in case first eval/auto-move was missed
+          // (e.g., player color detection failed initially, or board wasn't ready)
+          if (isNewGame && autoMove) {
+            setTimeout(() => {
+              // Re-detect player color (DOM may be more settled now)
+              playerColor = detectPlayerColor();
+              const stillMyTurn = playerColor && currentTurn === playerColor;
+              // If we haven't auto-moved yet for this position, request eval again
+              if (stillMyTurn && lastAutoMovePosition === null) {
+                log('Chessist: Retrying first move eval');
+                requestEval(currentFen);
+              }
+            }, 1500);
+          }
         } else {
           // Opponent's turn - stop any ongoing analysis to save resources
           hideCountdown();
@@ -1741,13 +1758,29 @@
     // Also observe for navigation (Chess.com is a SPA)
     const pageObserver = new MutationObserver(() => {
       const board = findBoard();
-      if (board && !evalBar) {
-        createEvalBar(board);
-        observeBoard(board);
+      if (board) {
+        // Check if evalBar is orphaned (removed from DOM after SPA navigation)
+        if (evalBar && !evalBar.isConnected) {
+          log('Chessist: Eval bar orphaned, re-creating');
+          evalBar = null;
+          evalBarFill = null;
+          evalScore = null;
+          bestMoveEl = null;
+          countdownEl = null;
+          depthEl = null;
+          turnIndicatorEl = null;
+          arrowOverlay = null;
+          currentBestMove = null;
+        }
+
+        if (!evalBar) {
+          createEvalBar(board);
+          observeBoard(board);
+        }
       }
 
-      // Auto rematch: detect game-over buttons and click rematch/new game
-      if (autoRematch) {
+      // Auto rematch/new game: detect game-over buttons
+      if (autoRematch || autoNewGame) {
         checkAutoRematch();
       }
     });
@@ -1758,19 +1791,45 @@
     });
   }
 
-  // Auto rematch: click rematch or new game button when game ends
+  // Simulate a realistic button click (Chess.com uses Vue which needs proper events)
+  function simulateButtonClick(btn) {
+    const rect = btn.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const eventOpts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
+
+    btn.dispatchEvent(new PointerEvent('pointerdown', { ...eventOpts, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+    btn.dispatchEvent(new MouseEvent('mousedown', eventOpts));
+    btn.dispatchEvent(new PointerEvent('pointerup', { ...eventOpts, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+    btn.dispatchEvent(new MouseEvent('mouseup', eventOpts));
+    btn.dispatchEvent(new MouseEvent('click', eventOpts));
+  }
+
+  // Auto rematch / auto new game: click buttons when game ends
   let autoRematchPending = false;
   function checkAutoRematch() {
     if (autoRematchPending) return;
 
-    // Look for game-over buttons
-    const rematchBtn = document.querySelector('[data-cy="game-over-modal-rematch-button"]');
-    const newGameBtn = document.querySelector('[data-cy="game-over-modal-new-game-button"]');
+    // Look for game-over buttons (visible and clickable)
+    const gameOverContainer = document.querySelector('.game-over-buttons-component');
+    if (!gameOverContainer) return;
 
-    const targetBtn = rematchBtn || newGameBtn;
+    const rematchBtn = gameOverContainer.querySelector('[data-cy="game-over-modal-rematch-button"]');
+    const newGameBtn = gameOverContainer.querySelector('[data-cy="game-over-modal-new-game-button"]');
+
+    // Determine which button to click based on settings
+    let targetBtn = null;
+    let btnName = '';
+    if (autoRematch && rematchBtn) {
+      targetBtn = rematchBtn;
+      btnName = 'Rematch';
+    } else if (autoNewGame && newGameBtn) {
+      targetBtn = newGameBtn;
+      btnName = 'New Game';
+    }
+
     if (targetBtn) {
       autoRematchPending = true;
-      const btnName = rematchBtn ? 'Rematch' : 'New Game';
 
       // Random delay 1-3s to look human
       const delay = 1000 + Math.floor(Math.random() * 2000);
@@ -1778,11 +1837,19 @@
 
       setTimeout(() => {
         // Re-check button still exists (modal might have closed)
-        const btn = document.querySelector('[data-cy="game-over-modal-rematch-button"]') ||
-                    document.querySelector('[data-cy="game-over-modal-new-game-button"]');
-        if (btn && autoRematch) {
-          btn.click();
+        const container = document.querySelector('.game-over-buttons-component');
+        if (!container) { autoRematchPending = false; return; }
+
+        let btn = null;
+        if (autoRematch) btn = container.querySelector('[data-cy="game-over-modal-rematch-button"]');
+        if (!btn && autoNewGame) btn = container.querySelector('[data-cy="game-over-modal-new-game-button"]');
+        if (btn) {
+          simulateButtonClick(btn);
           log('Chessist: Clicked', btnName);
+
+          // Schedule position checks after click to detect new game board
+          setTimeout(() => checkForPositionChange(false), 1000);
+          setTimeout(() => checkForPositionChange(false), 2000);
         }
         autoRematchPending = false;
       }, delay);
@@ -1859,6 +1926,10 @@
           if (message.autoRematch !== undefined) {
             autoRematch = message.autoRematch;
             log('Chessist: Auto rematch', autoRematch ? 'enabled' : 'disabled');
+          }
+          if (message.autoNewGame !== undefined) {
+            autoNewGame = message.autoNewGame;
+            log('Chessist: Auto new game', autoNewGame ? 'enabled' : 'disabled');
           }
           // Update auto-move delay settings if provided
           if (message.autoMoveDelayMin !== undefined) {

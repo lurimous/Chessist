@@ -12,24 +12,34 @@
       <h1>Chessist</h1>
     </div>
 
-    <div class="toggle-section">
-      <label class="toggle">
-        <input type="checkbox" id="enableToggle" checked>
-        <span class="slider"></span>
-        <span class="label">Enabled</span>
-      </label>
-    </div>
-
     <div class="eval-display">
       <div class="eval-label">Current Evaluation</div>
       <div class="eval-value" id="currentEval">--</div>
       <div class="eval-depth" id="currentDepth"></div>
     </div>
 
+    <button type="button" id="enableToggle" class="enable-btn active">Enabled</button>
+
     <div class="divider"></div>
 
     <div class="settings-section">
       <h2>Settings</h2>
+
+      <div class="setting-row">
+        <span class="setting-label">Skill Level <span class="tooltip" data-tip="Lower skill = occasional suboptimal moves">?</span></span>
+        <div class="depth-control">
+          <input type="range" id="skillLevel" min="1" max="20" value="20" title="Skill Level">
+          <span class="depth-value" id="skillValue">20</span>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <span class="setting-label">Analysis Depth <span class="tooltip" data-tip="Higher depth = stronger but slower">?</span></span>
+        <div class="depth-control">
+          <input type="range" id="engineDepth" min="10" max="50" value="18" title="Analysis Depth">
+          <span class="depth-value" id="depthValue">18</span>
+        </div>
+      </div>
 
       <label class="toggle">
         <input type="checkbox" id="showBestMove">
@@ -44,56 +54,47 @@
       </label>
 
       <div id="autoMoveSettings" class="auto-move-settings hidden">
-        <label class="toggle sub-toggle">
-          <input type="checkbox" id="instantMove">
-          <span class="slider"></span>
-          <span class="label">Instant Move</span>
-        </label>
         <div class="setting-row compact" id="delaySettings">
           <span class="setting-label">Delay (sec)</span>
-          <div class="delay-control">
-            <input type="number" id="delayMin" min="0" max="10" step="0.1" value="0.5" title="Minimum delay">
-            <span class="delay-separator">-</span>
-            <input type="number" id="delayMax" min="0" max="10" step="0.1" value="2" title="Maximum delay">
+          <div class="delay-right">
+            <div class="delay-control">
+              <input type="number" id="delayMin" min="0" max="10" step="0.1" value="0.5" title="Minimum delay">
+              <span class="delay-separator">-</span>
+              <input type="number" id="delayMax" min="0" max="10" step="0.1" value="2" title="Maximum delay">
+            </div>
+            <label class="toggle instant-toggle">
+              <input type="checkbox" id="instantMove">
+              <span class="slider"></span>
+              <span class="label">Instant</span>
+            </label>
           </div>
         </div>
         <label class="toggle sub-toggle" id="smartTimingToggle">
           <input type="checkbox" id="smartTiming" checked>
           <span class="slider"></span>
-          <span class="label">Smart Timing</span>
+          <span class="label">Smart Timing <span class="tooltip" data-tip="Adjusts delay based on move complexity">?</span></span>
         </label>
-        <p class="help-hint smart-hint">Adjusts delay based on move complexity</p>
-        <div class="setting-row compact">
-          <span class="setting-label">Skill Level</span>
-          <div class="depth-control">
-            <input type="range" id="skillLevel" min="1" max="20" value="20" title="20 = best moves, lower = more mistakes">
-            <span class="depth-value" id="skillValue">20</span>
-          </div>
-        </div>
-        <p class="help-hint">Lower skill = occasional suboptimal moves</p>
       </div>
 
-      <label class="toggle">
-        <input type="checkbox" id="autoRematch">
-        <span class="slider"></span>
-        <span class="label">Auto Rematch</span>
-      </label>
-      <p class="help-hint stealth-hint">Auto clicks rematch or new game</p>
+      <div class="toggle-group">
+        <p class="toggle-group-label">After Game Ends</p>
+        <label class="toggle">
+          <input type="checkbox" id="autoRematch">
+          <span class="slider"></span>
+          <span class="label">Auto Rematch</span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="autoNewGame">
+          <span class="slider"></span>
+          <span class="label">Auto New Game</span>
+        </label>
+      </div>
 
       <label class="toggle">
         <input type="checkbox" id="stealthMode">
         <span class="slider"></span>
-        <span class="label">Stealth Mode</span>
+        <span class="label">Stealth Mode <span class="tooltip" data-tip="Disables console logs">?</span></span>
       </label>
-      <p class="help-hint stealth-hint">Disables console logs</p>
-
-      <div class="setting-row">
-        <span class="setting-label">Analysis Depth</span>
-        <div class="depth-control">
-          <input type="range" id="engineDepth" min="10" max="50" value="18" title="Analysis depth (native supports 50+)">
-          <span class="depth-value" id="depthValue">18</span>
-        </div>
-      </div>
 
       <div class="setting-row">
         <span class="setting-label">Playing As</span>
