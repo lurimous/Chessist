@@ -449,7 +449,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         nativeStatus.classList.remove('hidden', 'connected');
         nativeStatus.classList.add('error');
         nativeStatusIcon.textContent = '⚠';
-        nativeStatusText.textContent = 'Native not supported, using WASM';
+        nativeStatusText.textContent = 'Native not supported, using built-in engine';
         setTimeout(() => {
           nativeStatus.classList.add('hidden');
         }, 3000);

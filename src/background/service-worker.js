@@ -495,6 +495,29 @@ function handleNativeMessage(message) {
   }
 }
 
+// Offscreen document readiness tracking
+let offscreenReady = false;
+let offscreenReadyResolve = null;
+let offscreenReadyPromise = null;
+
+function waitForOffscreenReady() {
+  if (offscreenReady) return Promise.resolve();
+  if (!offscreenReadyPromise) {
+    offscreenReadyPromise = new Promise(resolve => {
+      offscreenReadyResolve = resolve;
+      // Timeout fallback - don't wait forever
+      setTimeout(() => {
+        if (!offscreenReady) {
+          console.log('Chessist SW: Offscreen ready timeout, proceeding anyway');
+          offscreenReady = true;
+          resolve();
+        }
+      }, 5000);
+    });
+  }
+  return offscreenReadyPromise;
+}
+
 // Create offscreen document for running Stockfish WASM
 async function ensureOffscreenDocument() {
   if (offscreenDocumentCreated) return;
@@ -507,6 +530,7 @@ async function ensureOffscreenDocument() {
 
       if (existingContexts.length > 0) {
         offscreenDocumentCreated = true;
+        offscreenReady = true;
         return;
       }
     }
@@ -518,10 +542,11 @@ async function ensureOffscreenDocument() {
     });
 
     offscreenDocumentCreated = true;
-    console.log('Offscreen document created');
+    console.log('Chessist SW: Offscreen document created, waiting for ready signal...');
   } catch (e) {
     if (e.message?.includes('single offscreen document')) {
       offscreenDocumentCreated = true;
+      offscreenReady = true;
     } else {
       console.error('Failed to create offscreen document:', e);
     }
@@ -531,6 +556,16 @@ async function ensureOffscreenDocument() {
 // Handle messages from content script and popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('Chessist SW: Received message:', message.type);
+
+  if (message.type === 'OFFSCREEN_READY') {
+    console.log('Chessist SW: Offscreen document ready');
+    offscreenReady = true;
+    if (offscreenReadyResolve) {
+      offscreenReadyResolve();
+      offscreenReadyResolve = null;
+    }
+    return;
+  }
 
   if (message.type === 'EVALUATE') {
     handleEvaluateRequest(message.fen, message.isMouseRelease, sender.tab?.id, sendResponse);
@@ -828,6 +863,7 @@ async function handleEvaluateRequest(fen, isMouseRelease, tabId, sendResponse) {
 async function handleWasmEvaluation(fen, sendResponse) {
   try {
     await ensureOffscreenDocument();
+    await waitForOffscreenReady();
 
     chrome.runtime.sendMessage({
       type: 'EVALUATE_POSITION',

@@ -247,4 +247,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Initialize on load
 console.log('Chessist: Offscreen document loaded');
+
+// Signal to service worker that we're ready to receive messages
+chrome.runtime.sendMessage({ type: 'OFFSCREEN_READY' }).catch(() => {});
+
 initEngine();
