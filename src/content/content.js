@@ -33,6 +33,7 @@
   let autoMoveDelayMin = 0.5; // Minimum delay in seconds before auto-move
   let autoMoveDelayMax = 2; // Maximum delay in seconds before auto-move
   let skillLevel = 20; // Stockfish skill level (1-20, 20 = best)
+  let lastGameUrl = null; // Track game URL for new game detection (Chess.com SPA)
 
   // Conditional logging - respects stealth mode
   function log(...args) {
@@ -1636,6 +1637,15 @@
         return;
       }
 
+      // Detect premoves - Chess.com marks premoved pieces/squares
+      // Skip eval when a premove is visually shown (position isn't real yet)
+      const hasPremove = board.querySelector('.premove, [class*="premove"]') ||
+                         board.shadowRoot?.querySelector('.premove, [class*="premove"]');
+      if (hasPremove) {
+        log('Chessist: Premove detected, skipping eval');
+        return;
+      }
+
       const newFen = extractFEN(board);
 
       if (newFen && newFen !== currentFen) {
@@ -1647,12 +1657,32 @@
         const isStartingPosition = newFen.startsWith('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR');
         const wasStartingPosition = currentFen && currentFen.startsWith('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR');
 
-        // If we just started a new game, reset the engine and auto-move state
-        const isNewGame = isStartingPosition && !wasStartingPosition && currentFen !== null;
+        // Detect new game via FEN (starting position appeared) or URL change (Chess.com SPA)
+        let isNewGame = isStartingPosition && !wasStartingPosition && currentFen !== null;
+
+        const currentUrl = location.href;
+        const currentGameId = currentUrl.match(/\/game\/(\d+)/)?.[1] ||
+                              currentUrl.match(/\/live\/(\d+)/)?.[1];
+        const lastGameId = lastGameUrl?.match(/\/game\/(\d+)/)?.[1] ||
+                           lastGameUrl?.match(/\/live\/(\d+)/)?.[1];
+        if (currentGameId && lastGameId && currentGameId !== lastGameId) {
+          isNewGame = true;
+        }
+        lastGameUrl = currentUrl;
+
+        // Reset state on new game
         if (isNewGame) {
           log('Chessist: New game detected, resetting engine');
-          lastAutoMovePosition = null; // Reset so first move can trigger
+          lastAutoMovePosition = null;
           hideCountdown();
+          currentBestMove = null;
+
+          // Reset eval bar visual state
+          if (evalBarFill) evalBarFill.style.setProperty('height', '50%', 'important');
+          if (evalScore) { evalScore.textContent = '0.0'; evalScore.className = 'chess-live-eval-score equal'; }
+          if (depthEl) depthEl.textContent = '';
+          if (bestMoveEl) { bestMoveEl.style.display = 'none'; bestMoveEl.textContent = ''; }
+
           if (extensionContextValid && checkExtensionContext()) {
             chrome.runtime.sendMessage({ type: 'RESET_ENGINE' }).catch((e) => {
               if (e.message?.includes('Extension context invalidated')) {
@@ -1661,6 +1691,14 @@
               }
             });
           }
+
+          // Early player color detection for first move:
+          // Chess.com puts the player at the bottom. If board isn't flipped, player is white.
+          const isFlipped = board.classList?.contains('flipped') ||
+                            board.getAttribute('data-flipped') === 'true' ||
+                            board.hasAttribute('flipped') || board.flipped === true;
+          playerColor = isFlipped ? 'b' : 'w';
+          log('Chessist: New game - detected player color from board orientation:', playerColor);
         }
 
         currentFen = newFen;
@@ -1671,8 +1709,10 @@
           currentTurn = fenParts[1];
         }
 
-        // Re-detect player color (in case user switched games)
-        playerColor = detectPlayerColor();
+        // Re-detect player color (unless we just set it from new game detection above)
+        if (!isNewGame) {
+          playerColor = detectPlayerColor();
+        }
         log('Chessist: Turn:', currentTurn, 'Player:', playerColor || 'spectating');
 
         // Update turn indicator for debugging
@@ -1694,21 +1734,6 @@
           const evalDelay = isNewGame ? 500 : 0;
           evalBar?.classList.add('loading');
           setTimeout(() => requestEval(newFen, isMouseRelease), evalDelay);
-
-          // For new games as white: schedule a retry in case first eval/auto-move was missed
-          // (e.g., player color detection failed initially, or board wasn't ready)
-          if (isNewGame && autoMove) {
-            setTimeout(() => {
-              // Re-detect player color (DOM may be more settled now)
-              playerColor = detectPlayerColor();
-              const stillMyTurn = playerColor && currentTurn === playerColor;
-              // If we haven't auto-moved yet for this position, request eval again
-              if (stillMyTurn && lastAutoMovePosition === null) {
-                log('Chessist: Retrying first move eval');
-                requestEval(currentFen);
-              }
-            }, 1500);
-          }
         } else {
           // Opponent's turn - stop any ongoing analysis to save resources
           hideCountdown();
