@@ -1,9 +1,9 @@
 {
   "name": "com.chess.live.eval",
   "description": "Chessist - Native Stockfish Host",
-  "path": "D:\\Programming\\Chess Live Eval\\native-host\\stockfish_host.bat",
+  "path": "E:\\aiko\\files\\Programming\\Chess Live Eval\\native-host\\stockfish_host.bat",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://ibdofmpbjmkbbffodhbfojahdeklnbgj/"
+    "chrome-extension://pmmbeeikojinpojcjppagdfbfhnjbfci/"
   ]
 }

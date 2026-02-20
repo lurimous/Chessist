@@ -19,6 +19,7 @@ const STUCK_ANALYSIS_TIMEOUT_MS = 15000; // 15 seconds before considering analys
 let nativePort = null;
 let nativeConnected = false;
 let nativePath = null;
+let nativeLastError = null;
 let engineSource = 'wasm'; // 'wasm' or 'native'
 
 // Watchdog for native engine health
@@ -314,6 +315,7 @@ function connectNative() {
 
   try {
     console.log('Chessist SW: Connecting to native host...');
+    nativeLastError = null;
     nativePort = chrome.runtime.connectNative('com.chess.live.eval');
 
     nativePort.onMessage.addListener((message) => {
@@ -327,22 +329,28 @@ function connectNative() {
       nativePort = null;
       nativeConnected = false;
       nativePath = null;
+      nativeLastError = error;
       analysisEvalFen = null; // Clear analysis state on disconnect
-      
+
       // Stop watchdog when disconnected
       if (nativeWatchdogTimer) {
         clearInterval(nativeWatchdogTimer);
         nativeWatchdogTimer = null;
       }
 
-      // Auto-fallback to WASM if native messaging is forbidden (e.g., Opera browser)
-      if (error.includes('forbidden') || error.includes('not found')) {
-        console.log('Chessist SW: Native messaging not available, falling back to WASM');
+      // Auto-fallback to WASM only if the browser forbids native messaging (e.g., Opera)
+      // "not found" means the host isn't registered yet — a setup issue, not a browser limitation.
+      // Don't permanently switch to WASM for setup errors; let the user fix and retry.
+      if (error.includes('forbidden')) {
+        console.log('Chessist SW: Native messaging not supported by this browser, falling back to WASM');
         engineSource = 'wasm';
         chrome.storage.sync.set({ engineSource: 'wasm' });
-        reconnectAttempts = 0; // Reset attempts when permanently failing
-        // Notify any open popups about the change
+        reconnectAttempts = 0;
         chrome.runtime.sendMessage({ type: 'ENGINE_SOURCE_CHANGED', source: 'wasm' }).catch(() => {});
+      } else if (error.includes('not found')) {
+        // Host not registered — setup issue. Stay in native mode so the user sees the error.
+        console.log('Chessist SW: Native host not found — install.bat may not have been run correctly');
+        reconnectAttempts = 0; // No point retrying; won't succeed until setup is fixed
       } else if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         // Attempt to reconnect for temporary failures
         reconnectAttempts++;
@@ -636,7 +644,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({
           connected: nativeConnected,
           path: nativePath,
-          error: nativeConnected ? null : 'Failed to connect - run install.bat'
+          error: nativeConnected ? null : (nativeLastError || 'Failed to connect - run install.bat')
         });
       }, 1000);
       return true;
