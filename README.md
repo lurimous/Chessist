@@ -86,7 +86,9 @@ For much faster analysis (10-100x), you can use a locally installed Stockfish.
 
 1. **Install Stockfish**
    - Download from https://stockfishchess.org/download/
-   - Extract to `C:\stockfish\` or add to PATH
+   - Extract the zip, rename the `.exe` to `stockfish.exe`, and move it to `C:\Windows\`
+   - This makes it available in PATH automatically — no extra configuration needed
+   - Alternatively, run `install.bat` and it will offer to set this up for you
 
 2. **Run the installer**
    ```

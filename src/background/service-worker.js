@@ -209,6 +209,7 @@ function cacheEvaluation(fen, evaluation) {
     pv: evaluation.pv || [],
     depth: evaluation.depth || 0,
     fen: fen,
+    turn: evaluation.turn || fen.split(' ')[1] || 'w',
     timestamp: Date.now()
   });
 
@@ -292,6 +293,7 @@ function checkPVContinuation(newFen) {
       pv: pvCache.pv.slice(1),
       depth: pvCache.depth,
       fen: newFen,
+      turn: newFen.split(' ')[1] || 'w',
       fromPVCache: true
     };
   }
@@ -409,12 +411,7 @@ function disconnectNative() {
 // Safe postMessage wrapper with null check
 function sendToNativePort(message) {
   if (!nativePort) {
-    console.error('Chessist SW: Native port is null, cannot send message');
-    // Attempt reconnection if we're supposed to be using native
-    if (engineSource === 'native') {
-      console.log('Chessist SW: Attempting to reconnect...');
-      connectNative();
-    }
+    console.warn('Chessist SW: Native port is null, dropping message (reconnection handled by onDisconnect)');
     return false;
   }
   
@@ -660,7 +657,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'SET_DEPTH') {
     // Forward to native or WASM
-    if (engineSource === 'native') {
+    if (engineSource === 'native' && nativePort) {
       sendToNativePort({ type: 'set_option', name: 'Depth', value: message.depth });
     }
     // WASM will read from storage
@@ -670,7 +667,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'SET_SKILL_LEVEL') {
     // Forward skill level to native Stockfish (UCI option)
-    if (engineSource === 'native') {
+    if (engineSource === 'native' && nativePort) {
       sendToNativePort({ type: 'set_option', name: 'Skill Level', value: message.level });
     }
     sendResponse({ success: true });
@@ -679,7 +676,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'STOP_ANALYSIS') {
     // Stop current analysis (but don't reset caches)
-    if (engineSource === 'native') {
+    if (engineSource === 'native' && nativePort) {
       sendToNativePort({ type: 'stop' });
     } else {
       // Send stop to offscreen document
@@ -694,7 +691,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'RESET_ENGINE') {
     // Reset the engine (clear hash tables, stop analysis)
-    if (engineSource === 'native') {
+    if (engineSource === 'native' && nativePort) {
       sendToNativePort({ type: 'reset' });
     } else {
       // Send reset to offscreen document
@@ -845,7 +842,7 @@ async function handleEvaluateRequest(fen, isMouseRelease, tabId, sendResponse) {
       // If sending failed, fall back to WASM for this request
       console.log('Chessist SW: Native send failed, using WASM for this evaluation');
       analysisEvalFen = null;
-      handleWasmEvaluation(fen, sendResponse);
+      handleWasmEvaluation(fen, depth, sendResponse);
     }
 
     // Wait for evaluation with timeout
@@ -863,19 +860,20 @@ async function handleEvaluateRequest(fen, isMouseRelease, tabId, sendResponse) {
 
   } else {
     // Use WASM Stockfish
-    await handleWasmEvaluation(fen, sendResponse);
+    await handleWasmEvaluation(fen, depth, sendResponse);
   }
 }
 
 // Separate WASM evaluation handler
-async function handleWasmEvaluation(fen, sendResponse) {
+async function handleWasmEvaluation(fen, depth, sendResponse) {
   try {
     await ensureOffscreenDocument();
     await waitForOffscreenReady();
 
     chrome.runtime.sendMessage({
       type: 'EVALUATE_POSITION',
-      fen: fen
+      fen: fen,
+      depth: depth
     }).catch(e => {
       console.log('Chessist SW: Offscreen message error:', e.message);
     });

@@ -1576,10 +1576,49 @@
     }
 
     // Initial FEN extraction and eval
-    const fen = extractFEN(board);
-    if (fen && fen !== currentFen) {
+    const rawFen = extractFEN(board);
+    if (rawFen && rawFen !== currentFen) {
+      const previousFen = currentFen;
+
+      // Normalize starting position FEN: detectTurn() may read the previous game's
+      // stale move list from the DOM, producing the wrong turn ('b') for a new game.
+      const isStartPos = rawFen.startsWith('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR');
+      const fen = isStartPos
+        ? 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+        : rawFen;
+
+      // Skip if normalized FEN still matches currentFen (prevents redundant eval)
+      if (fen === currentFen) return;
+
       currentFen = fen;
-      requestEval(fen);
+
+      // Always detect player color from board orientation (reliable, doesn't depend on shadow DOM)
+      const isFlipped = board.classList?.contains('flipped') ||
+                        board.getAttribute('data-flipped') === 'true' ||
+                        board.hasAttribute('flipped') || board.flipped === true;
+      playerColor = isFlipped ? 'b' : 'w';
+
+      // Update current turn from FEN
+      const fenParts = fen.split(' ');
+      if (fenParts.length > 1) {
+        currentTurn = fenParts[1];
+      }
+
+      // If there was a previous game (previousFen is non-null), treat this as a new game:
+      // reset the engine and apply a short delay so the engine is ready before evaluating.
+      const isNewGameLoad = previousFen !== null;
+      if (isNewGameLoad) {
+        lastAutoMovePosition = null;
+        hideCountdown();
+        if (extensionContextValid && checkExtensionContext()) {
+          chrome.runtime.sendMessage({ type: 'RESET_ENGINE' }).catch(() => {});
+        }
+        evalBar?.classList.add('loading');
+        setTimeout(() => requestEval(fen), 500);
+      } else {
+        evalBar?.classList.add('loading');
+        requestEval(fen);
+      }
     }
 
     // Method 1: MutationObserver for DOM changes
@@ -1661,10 +1700,8 @@
         let isNewGame = isStartingPosition && !wasStartingPosition && currentFen !== null;
 
         const currentUrl = location.href;
-        const currentGameId = currentUrl.match(/\/game\/(\d+)/)?.[1] ||
-                              currentUrl.match(/\/live\/(\d+)/)?.[1];
-        const lastGameId = lastGameUrl?.match(/\/game\/(\d+)/)?.[1] ||
-                           lastGameUrl?.match(/\/live\/(\d+)/)?.[1];
+        const currentGameId = currentUrl.match(/\/(?:live|daily)\/(\d+)/)?.[1];
+        const lastGameId = lastGameUrl?.match(/\/(?:live|daily)\/(\d+)/)?.[1];
         if (currentGameId && lastGameId && currentGameId !== lastGameId) {
           isNewGame = true;
         }
@@ -1701,10 +1738,17 @@
           log('Chessist: New game - detected player color from board orientation:', playerColor);
         }
 
-        currentFen = newFen;
+        // For the starting position, detectTurn() can read the PREVIOUS game's stale
+        // move list from the DOM (if the game API isn't ready yet), returning the wrong turn.
+        // The starting position always has white to move — normalize it.
+        const fenForEval = isStartingPosition
+          ? 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+          : newFen;
+
+        currentFen = fenForEval;
 
         // Update current turn from FEN
-        const fenParts = newFen.split(' ');
+        const fenParts = fenForEval.split(' ');
         if (fenParts.length > 1) {
           currentTurn = fenParts[1];
         }
@@ -1733,7 +1777,7 @@
           // Delay slightly after new game reset so engine is ready
           const evalDelay = isNewGame ? 500 : 0;
           evalBar?.classList.add('loading');
-          setTimeout(() => requestEval(newFen, isMouseRelease), evalDelay);
+          setTimeout(() => requestEval(fenForEval, isMouseRelease), evalDelay);
         } else {
           // Opponent's turn - stop any ongoing analysis to save resources
           hideCountdown();

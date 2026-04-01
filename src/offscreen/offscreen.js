@@ -210,6 +210,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('Chessist: Offscreen received message:', message.type);
 
   if (message.type === 'EVALUATE_POSITION') {
+    if (message.depth) currentDepth = message.depth;
     evaluatePosition(message.fen);
     sendResponse({ status: 'evaluating' });
   } else if (message.type === 'SET_DEPTH') {

@@ -63,11 +63,38 @@ echo.
 echo Manifest created at: %MANIFEST_PATH%
 echo Extension ID: !EXT_ID!
 echo.
+:: Offer to set up Stockfish if not already in PATH
+where stockfish >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo Stockfish was not found in PATH.
+    echo Would you like to set it up now? ^(recommended^)
+    echo   - Download Stockfish from https://stockfishchess.org/download/
+    echo   - Extract the zip and locate the .exe file
+    echo.
+    set /p "SF_SRC=Enter full path to your Stockfish .exe ^(or press Enter to skip^): "
+    if not "!SF_SRC!"=="" (
+        if exist "!SF_SRC!" (
+            echo Copying to C:\Windows\stockfish.exe ...
+            copy /y "!SF_SRC!" "C:\Windows\stockfish.exe" >nul 2>&1
+            if errorlevel 1 (
+                echo Failed to copy. Try running this script as Administrator.
+            ) else (
+                echo Stockfish installed to C:\Windows\stockfish.exe
+            )
+        ) else (
+            echo File not found: !SF_SRC!
+            echo Skipping Stockfish setup.
+        )
+    )
+) else (
+    echo Stockfish found in PATH.
+)
+
+echo.
 echo NOTE: You need to have:
 echo   1. Python 3 installed and in PATH
-echo   2. Stockfish installed ^(in PATH or common locations^)
-echo.
-echo If Stockfish is not found automatically, set the STOCKFISH_PATH environment variable.
+echo   2. Stockfish installed ^(in PATH or C:\Windows\^)
 echo.
 echo IMPORTANT: Restart your browser after installation!
 echo.
