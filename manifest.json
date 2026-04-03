@@ -7,7 +7,8 @@
     "storage",
     "offscreen",
     "tabs",
-    "nativeMessaging"
+    "nativeMessaging",
+    "scripting"
   ],
   "host_permissions": [
     "https://www.chess.com/*"
@@ -42,7 +43,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["src/engine/*", "src/offscreen/*"],
+      "resources": ["src/engine/*", "src/offscreen/*", "icons/*"],
       "matches": ["<all_urls>"]
     }
   ]

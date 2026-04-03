@@ -17,12 +17,37 @@
   let playerColor = null; // Track player's color (for perspective)
   let isEnabled = true;
   let showBestMove = false;
+  let showMoveIcon = false;
   let autoMove = false;
   let lastAutoMovePosition = null;  // Track position+turn where we last auto-moved to avoid duplicate moves
   let manualPlayerColor = 'auto';  // 'auto', 'w', or 'b' - manual override for player color
   let boardObserver = null;
   let arrowOverlay = null;  // SVG overlay for best move arrow
   let currentBestMove = null;  // Track current best move to avoid redrawing
+
+  // W/L balance & throw mode
+  let wlBalance = false;
+  let maxConsecutiveWins = 2;
+  let maxConsecutiveLosses = 3;
+  let throwRandom = false;   // Randomise the win threshold each cycle
+  let lossRandom = false;    // Randomise the loss threshold each cycle
+  let targetAccuracy = 100;        // 100 = off (best move), lower = intentional errors
+  let shouldThrowThisGame = false; // Set at game start: play badly to lose
+  let shouldWinThisGame = false;   // Set at game start: play at full strength to win
+  let gameOverHandled = false;     // Prevent double-recording per game
+
+  // ELO matching
+  let matchElo = false;
+  let manualElo = null;  // null = auto-detect from page
+
+  // Accuracy tracking
+  let accuracyEl = null;
+  let prevCpWhite = null;      // White-perspective eval before player's last move
+  let prevBestMove = null;     // Best move recommended before player's last move
+  let lastMoveToSquare = null; // Destination square of the last move played (for icon placement)
+  let moveAccuracies = [];     // Per-move accuracy history for this game
+  let accuracyEvalPending = false;  // Waiting for post-move eval to calculate accuracy
+  const ACCURACY_EVAL_DEPTH = 10;   // Minimum depth for accuracy calculation
 
   let targetDepth = 18; // Default depth
   let stealthMode = false; // Disable console logging when true
@@ -58,11 +83,14 @@
   async function loadSettings() {
     try {
       const result = await chrome.storage.sync.get([
-        'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch', 'autoNewGame',
-        'stealthMode', 'engineDepth', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
+        'enabled', 'showBestMove', 'showMoveIcon', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch', 'autoNewGame',
+        'stealthMode', 'engineDepth', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel',
+        'targetAccuracy', 'wlBalance', 'maxConsecutiveWins', 'maxConsecutiveLosses', 'throwRandom',
+        'lossRandom', 'matchElo', 'manualElo'
       ]);
       isEnabled = result.enabled !== false; // Default true
       showBestMove = result.showBestMove === true; // Default false
+      showMoveIcon = result.showMoveIcon === true; // Default false
       autoMove = result.autoMove === true; // Default false
       instantMove = result.instantMove === true; // Default false
       smartTiming = result.smartTiming !== false; // Default true
@@ -74,6 +102,24 @@
       autoMoveDelayMin = result.autoMoveDelayMin ?? 0.5;
       autoMoveDelayMax = result.autoMoveDelayMax ?? 2;
       skillLevel = result.skillLevel ?? 20;
+      targetAccuracy = result.targetAccuracy ?? 100;
+      wlBalance = result.wlBalance === true;
+      maxConsecutiveWins = result.maxConsecutiveWins ?? 2;
+      maxConsecutiveLosses = result.maxConsecutiveLosses ?? 3;
+      throwRandom = result.throwRandom === true;
+      lossRandom = result.lossRandom === true;
+      matchElo = result.matchElo === true;
+      manualElo = result.manualElo ?? null;
+
+      // Load throw/win state from local storage
+      const local = await chrome.storage.local.get(['shouldThrowNextGame', 'shouldWinNextGame']);
+      shouldThrowThisGame = false; // reset for this page load; will be set on new game
+      if (local.shouldThrowNextGame) {
+        log('Chessist: Throw flag pending from previous game');
+      }
+      if (local.shouldWinNextGame) {
+        log('Chessist: Win flag pending from previous game');
+      }
     } catch (e) {
       // Using default settings - don't log in case stealth mode is on
     }
@@ -143,6 +189,12 @@
       z-index: 100;
     `;
 
+    // Ensure board has position: relative so absolute children are positioned correctly
+    const boardComputedStyle = window.getComputedStyle(board);
+    if (boardComputedStyle.position === 'static') {
+      board.style.position = 'relative';
+    }
+
     // Insert SVG directly into the wc-chess-board element
     board.appendChild(svg);
     arrowOverlay = svg;
@@ -150,8 +202,58 @@
     return svg;
   }
 
-  // Draw best move arrow on the board
-  function drawBestMoveArrow(move) {
+  // Draw a single arrow on an SVG group. color/opacity/strokeWidth are visual params.
+  function drawArrow(group, fromSquare, toSquare, isFlipped, color, opacity, strokeWidth) {
+    const from = getSquareCenter(fromSquare, isFlipped);
+    const to   = getSquareCenter(toSquare,   isFlipped);
+
+    if (isNaN(from.x) || isNaN(from.y) || isNaN(to.x) || isNaN(to.y)) return;
+
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const angle = Math.atan2(dy, dx);
+    if (isNaN(angle)) return;
+
+    const arrowHeadLength = 3.8;
+    const arrowHeadWidth  = 3.8;
+
+    const lineEndX = to.x - Math.cos(angle) * arrowHeadLength * 0.6;
+    const lineEndY = to.y - Math.sin(angle) * arrowHeadLength * 0.6;
+
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', from.x.toFixed(2));
+    line.setAttribute('y1', from.y.toFixed(2));
+    line.setAttribute('x2', lineEndX.toFixed(2));
+    line.setAttribute('y2', lineEndY.toFixed(2));
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', strokeWidth);
+    line.setAttribute('stroke-linecap', 'round');
+    line.setAttribute('opacity', opacity);
+
+    const headBaseX = to.x - Math.cos(angle) * arrowHeadLength;
+    const headBaseY = to.y - Math.sin(angle) * arrowHeadLength;
+    const perpX = Math.sin(angle) * arrowHeadWidth / 2;
+    const perpY = -Math.cos(angle) * arrowHeadWidth / 2;
+
+    const head = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    head.setAttribute('points', `
+      ${to.x.toFixed(2)},${to.y.toFixed(2)}
+      ${(headBaseX + perpX).toFixed(2)},${(headBaseY + perpY).toFixed(2)}
+      ${(headBaseX - perpX).toFixed(2)},${(headBaseY - perpY).toFixed(2)}
+    `);
+    head.setAttribute('fill', color);
+    head.setAttribute('opacity', opacity);
+
+    group.appendChild(line);
+    group.appendChild(head);
+  }
+
+  // Draw best move arrow(s).
+  // multiPvMoves is an array of up to 3 independent best moves from MultiPV analysis:
+  //   [0] = best move  → purple, full opacity
+  //   [1] = 2nd best   → yellow, medium opacity
+  //   [2] = 3rd best   → red,    low opacity
+  function drawBestMoveArrow(move, multiPvMoves) {
     if (!move || move.length < 4) {
       clearArrow();
       return;
@@ -160,97 +262,34 @@
     const board = findBoard();
     if (!board) return;
 
-    // Check if board is flipped (black's perspective)
     const isFlipped = board.classList?.contains('flipped') ||
                       board.getAttribute('data-flipped') === 'true' ||
                       playerColor === 'b';
 
-    // Parse move
-    const fromSquare = move.substring(0, 2);
-    const toSquare = move.substring(2, 4);
-
-    // Get coordinates in viewBox units (0-100)
-    const from = getSquareCenter(fromSquare, isFlipped);
-    const to = getSquareCenter(toSquare, isFlipped);
-
-    // Validate coordinates
-    if (isNaN(from.x) || isNaN(from.y) || isNaN(to.x) || isNaN(to.y)) {
-      log('Chessist: Invalid arrow coordinates, skipping');
-      return;
-    }
-
-    // Create or get overlay
     const svg = createArrowOverlay(board);
     if (!svg) return;
 
-    // Clear existing arrows
     const existingGroup = svg.querySelector('.best-move-arrow-group');
-    if (existingGroup) {
-      existingGroup.remove();
-    }
+    if (existingGroup) existingGroup.remove();
 
-    // Create a group for the arrow
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     group.setAttribute('class', 'best-move-arrow-group');
 
-    // Calculate arrow geometry (in viewBox units where each square is 12.5)
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const angle = Math.atan2(dy, dx);
+    const alts = (multiPvMoves || []).filter(m => m && m.length >= 4);
 
-    // Arrow dimensions in viewBox units
-    const strokeWidth = 2.2;
-    const arrowHeadLength = 4;
-    const arrowHeadWidth = 4;
-
-    // Shorten the line to make room for arrowhead
-    const lineEndX = to.x - Math.cos(angle) * arrowHeadLength * 0.6;
-    const lineEndY = to.y - Math.sin(angle) * arrowHeadLength * 0.6;
-
-    // Validate calculated values
-    if (isNaN(lineEndX) || isNaN(lineEndY) || isNaN(angle)) {
-      log('Chessist: Invalid arrow geometry, skipping');
-      return;
+    // Draw alternatives first (behind best move)
+    if (alts[2]) {
+      drawArrow(group, alts[2].substring(0, 2), alts[2].substring(2, 4),
+                isFlipped, '#e05050', '0.45', 1.6);
     }
-
-    // Create arrow line
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', from.x.toFixed(2));
-    line.setAttribute('y1', from.y.toFixed(2));
-    line.setAttribute('x2', lineEndX.toFixed(2));
-    line.setAttribute('y2', lineEndY.toFixed(2));
-    line.setAttribute('stroke', '#792A9E');
-    line.setAttribute('stroke-width', strokeWidth);
-    line.setAttribute('stroke-linecap', 'round');
-    line.setAttribute('opacity', '0.85');
-
-    // Create arrowhead as a polygon
-    const headTipX = to.x;
-    const headTipY = to.y;
-    const headBaseX = to.x - Math.cos(angle) * arrowHeadLength;
-    const headBaseY = to.y - Math.sin(angle) * arrowHeadLength;
-
-    // Perpendicular offset for arrowhead width
-    const perpX = Math.sin(angle) * arrowHeadWidth / 2;
-    const perpY = -Math.cos(angle) * arrowHeadWidth / 2;
-
-    // Validate arrowhead values
-    if (isNaN(headTipX) || isNaN(headTipY) || isNaN(headBaseX) || isNaN(headBaseY) || isNaN(perpX) || isNaN(perpY)) {
-      log('Chessist: Invalid arrowhead geometry, skipping');
-      return;
+    if (alts[1]) {
+      drawArrow(group, alts[1].substring(0, 2), alts[1].substring(2, 4),
+                isFlipped, '#e0b840', '0.55', 1.8);
     }
+    // Best move on top
+    drawArrow(group, move.substring(0, 2), move.substring(2, 4),
+              isFlipped, '#792A9E', '0.9', 2.2);
 
-    const arrowHead = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-    arrowHead.setAttribute('points', `
-      ${headTipX.toFixed(2)},${headTipY.toFixed(2)}
-      ${(headBaseX + perpX).toFixed(2)},${(headBaseY + perpY).toFixed(2)}
-      ${(headBaseX - perpX).toFixed(2)},${(headBaseY - perpY).toFixed(2)}
-    `);
-    arrowHead.setAttribute('fill', '#792A9E');
-    arrowHead.setAttribute('opacity', '0.85');
-
-    group.appendChild(line);
-    group.appendChild(arrowHead);
     svg.appendChild(group);
     currentBestMove = move;
   }
@@ -259,11 +298,164 @@
   function clearArrow() {
     if (arrowOverlay) {
       const existingGroup = arrowOverlay.querySelector('.best-move-arrow-group');
-      if (existingGroup) {
-        existingGroup.remove();
-      }
+      if (existingGroup) existingGroup.remove();
     }
     currentBestMove = null;
+  }
+
+  // Draw move classification icon on the board SVG at the top-right of the destination square
+  function drawMoveIconOnBoard(toSquare, classification) {
+    const board = findBoard();
+    if (!board) return;
+
+    const isFlipped = board.classList?.contains('flipped') ||
+                      board.getAttribute('data-flipped') === 'true' ||
+                      playerColor === 'b';
+
+    const svg = createArrowOverlay(board);
+    if (!svg) return;
+
+    // Remove any existing icon
+    const existing = svg.querySelector('.move-icon-group');
+    if (existing) existing.remove();
+
+    if (!showMoveIcon) return;
+
+    const { file, rank } = squareToIndices(toSquare);
+    const squareSize = 12.5;
+    let squareX, squareY;
+    if (isFlipped) {
+      squareX = (7 - file) * squareSize;
+      squareY = rank * squareSize;
+    } else {
+      squareX = file * squareSize;
+      squareY = (7 - rank) * squareSize;
+    }
+
+    // Icon is placed at the top-right corner of the destination square, scaled to ~3.5 units
+    const iconSize = 3.8;
+    const iconX = squareX + squareSize - iconSize + 0.2;
+    const iconY = squareY - 0.2;
+
+    const { bg, inner } = getMoveIconParts(classification);
+
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'move-icon-group');
+    g.setAttribute('transform', `translate(${iconX}, ${iconY}) scale(${iconSize / 18})`);
+    g.innerHTML =
+      `<path opacity="0.3" d="M9,.5a9,9,0,1,0,9,9A9,9,0,0,0,9,.5Z"/>` +
+      `<path fill="${bg}" d="M9,0a9,9,0,1,0,9,9A9,9,0,0,0,9,0Z"/>` +
+      inner;
+
+    svg.appendChild(g);
+  }
+
+  // Return bg color and inner SVG paths for a classification (split from getMoveIconSvg)
+  function getMoveIconParts(classification) {
+    const icons = {
+      best:       { bg: '#81B64C', inner: `<path fill="#fff" d="M9,2.93A.5.5,0,0,0,8.73,3a.46.46,0,0,0-.17.22L7.24,6.67l-3.68.19A.52.52,0,0,0,3.3,7a.53.53,0,0,0-.16.23.45.45,0,0,0,0,.28.44.44,0,0,0,.15.23L6.15,10l-1,3.56a.45.45,0,0,0,0,.28.46.46,0,0,0,.17.22.41.41,0,0,0,.26.09.43.43,0,0,0,.27-.08l3.09-2,3.09,2a.46.46,0,0,0,.53,0,.46.46,0,0,0,.17-.22.53.53,0,0,0,0-.28l-1-3.56L14.71,7.7a.44.44,0,0,0,.15-.23.45.45,0,0,0,0-.28A.53.53,0,0,0,14.7,7a.52.52,0,0,0-.26-.1l-3.68-.2L9.44,3.23A.46.46,0,0,0,9.27,3,.5.5,0,0,0,9,2.93Z"/>` },
+      excellent:  { bg: '#81B64C', inner: `<path fill="#fff" d="M13.79,10.84c0-.2.4-.53.4-.94S14,9.22,14,9.08a2.06,2.06,0,0,0,.18-.83,1,1,0,0,0-.3-.69,1.13,1.13,0,0,0-.55-.2,10.29,10.29,0,0,1-2.07,0c-.37-.23,0-1.18.18-1.7s.51-2.12-.77-2.43c-.69-.17-.66.37-.78.9-.05.21-.09.43-.13.57A5,5,0,0,1,7.05,7.73a1.57,1.57,0,0,1-.42.18v4.94A7.23,7.23,0,0,1,8,13c.52.12.91.25,1.44.33a11.11,11.11,0,0,0,1.62.16,6.65,6.65,0,0,0,1.18,0,1.09,1.09,0,0,0,1-.59.66.66,0,0,0,.06-.2,1.63,1.63,0,0,1,.07-.3c.13-.28.37-.3.5-.68S13.74,11,13.79,10.84Z"/><path fill="#fff" d="M5.49,7.59H4.31a.5.5,0,0,0-.5.5v4.56a.5.5,0,0,0,.5.5H5.49a.5.5,0,0,0,.5-.5V8.09A.5.5,0,0,0,5.49,7.59Z"/>` },
+      good:       { bg: '#95b776', inner: `<path fill="#fff" d="M15.11,6.31,9.45,12,7.79,13.63a.39.39,0,0,1-.28.11.39.39,0,0,1-.27-.11L2.89,9.28A.39.39,0,0,1,2.78,9a.39.39,0,0,1,.11-.27L4.28,7.35a.34.34,0,0,1,.12-.09l.15,0a.37.37,0,0,1,.15,0,.38.38,0,0,1,.13.09L7.52,10l5.65-5.65a.38.38,0,0,1,.13-.09.37.37,0,0,1,.15,0,.4.4,0,0,1,.15,0,.34.34,0,0,1,.12.09l1.39,1.38a.41.41,0,0,1,.08.13.33.33,0,0,1,0,.15.4.4,0,0,1,0,.15A.5.5,0,0,1,15.11,6.31Z"/>` },
+      inaccuracy: { bg: '#F7C631', inner: `<path fill="#fff" d="M10.32,14.1a.27.27,0,0,1,0,.13.44.44,0,0,1-.08.11l-.11.08-.13,0H8l-.13,0-.11-.08a.41.41,0,0,1-.08-.24V12.2a.27.27,0,0,1,0-.13.36.36,0,0,1,.07-.1.39.39,0,0,1,.1-.08l.13,0h2a.31.31,0,0,1,.24.1.39.39,0,0,1,.08.1.51.51,0,0,1,0,.13Zm-.12-3.93a.17.17,0,0,1,0,.12.41.41,0,0,1-.07.11.4.4,0,0,1-.23.08H8.1a.31.31,0,0,1-.34-.31L7.61,3.4a.36.36,0,0,1,.09-.24.23.23,0,0,1,.11-.08.27.27,0,0,1,.13,0h2.11a.32.32,0,0,1,.25.1.36.36,0,0,1,.09.24Z"/>` },
+      mistake:    { bg: '#FFA459', inner: `<path fill="#fff" d="M9.92,14.52a.27.27,0,0,1,0,.12.41.41,0,0,1-.07.11.32.32,0,0,1-.23.09H7.7a.25.25,0,0,1-.12,0,.27.27,0,0,1-.1-.08.31.31,0,0,1-.09-.22V12.69a.32.32,0,0,1,.09-.23l.1-.07.12,0H9.59a.32.32,0,0,1,.23.09.61.61,0,0,1,.07.1.28.28,0,0,1,0,.13Zm2.2-7.17a3.1,3.1,0,0,1-.36.73,5.58,5.58,0,0,1-.49.6,6,6,0,0,1-.52.49,8,8,0,0,0-.65.63,1,1,0,0,0-.27.7v.22a.24.24,0,0,1,0,.12.17.17,0,0,1-.06.1.3.3,0,0,1-.1.07l-.12,0H7.79l-.12,0a.3.3,0,0,1-.1-.07.26.26,0,0,1-.07-.1.37.37,0,0,1,0-.12v-.35a2.42,2.42,0,0,1,.13-.84,2.55,2.55,0,0,1,.33-.66,3.38,3.38,0,0,1,.45-.55c.16-.15.33-.29.49-.42a7.73,7.73,0,0,0,.64-.64,1,1,0,0,0,.26-.67.77.77,0,0,0-.07-.34A.75.75,0,0,0,9.48,6a1.16,1.16,0,0,0-.72-.24,1.61,1.61,0,0,0-.49.07A3,3,0,0,0,7.86,6a1.41,1.41,0,0,0-.29.18l-.11.09a.5.5,0,0,1-.24.06A.31.31,0,0,1,7,6.19L6,5a.29.29,0,0,1,0-.4,1.36,1.36,0,0,1,.21-.2A3.07,3.07,0,0,1,6.81,4a5.38,5.38,0,0,1,.89-.37,3.75,3.75,0,0,1,1.2-.17,4.07,4.07,0,0,1,1.2.19,4,4,0,0,1,1.09.56,2.76,2.76,0,0,1,.78.92,2.82,2.82,0,0,1,.28,1.28A3,3,0,0,1,12.12,7.35Z"/>` },
+      blunder:    { bg: '#FA412D', inner: `<path fill="#fff" d="M14.74,5A2.58,2.58,0,0,0,14,4a3.76,3.76,0,0,0-1.09-.56,4.07,4.07,0,0,0-1.2-.19,3.92,3.92,0,0,0-1.18.17,5.87,5.87,0,0,0-.9.37,3,3,0,0,0-.32.2,3.46,3.46,0,0,1,.42.63,3.29,3.29,0,0,1,.36,1.47.31.31,0,0,0,.19-.06L10.37,6a2.9,2.9,0,0,1,.29-.19,3.89,3.89,0,0,1,.41-.17,1.55,1.55,0,0,1,.48-.07,1.1,1.1,0,0,1,.72.24.72.72,0,0,1,.23.26.8.8,0,0,1,.07.34,1,1,0,0,1-.25.67,7.71,7.71,0,0,1-.65.63,6.2,6.2,0,0,0-.48.43,2.93,2.93,0,0,0-.45.54,2.55,2.55,0,0,0-.33.66,2.62,2.62,0,0,0-.13.83v.35a.24.24,0,0,0,0,.12.35.35,0,0,0,.17.17l.12,0h1.71l.12,0a.23.23,0,0,0,.1-.07.21.21,0,0,0,.06-.1.27.27,0,0,0,0-.12V10.3a1,1,0,0,1,.26-.7q.27-.28.66-.63a5.79,5.79,0,0,0,.51-.48,4.51,4.51,0,0,0,.48-.6,2.56,2.56,0,0,0,.36-.72,2.81,2.81,0,0,0,.14-1A2.66,2.66,0,0,0,14.74,5Z"/><path fill="#fff" d="M12.38,12.15H10.5l-.12,0a.34.34,0,0,0-.18.29v1.82a.36.36,0,0,0,.08.23.23.23,0,0,0,.1.07l.12,0h1.88a.24.24,0,0,0,.12,0,.26.26,0,0,0,.11-.07.36.36,0,0,0,.07-.1.28.28,0,0,0,0-.13V12.46a.27.27,0,0,0,0-.12.61.61,0,0,0-.07-.1A.32.32,0,0,0,12.38,12.15Z"/><path fill="#fff" d="M6.79,12.15H4.91l-.12,0a.34.34,0,0,0-.18.29v1.82a.36.36,0,0,0,.08.23.23.23,0,0,0,.1.07l.12,0H6.79a.24.24,0,0,0,.12,0A.26.26,0,0,0,7,14.51a.36.36,0,0,0,.07-.1.28.28,0,0,0,0-.13V12.46a.27.27,0,0,0,0-.12.61.61,0,0,0-.07-.1A.32.32,0,0,0,6.79,12.15Z"/><path fill="#fff" d="M8.39,4A3.76,3.76,0,0,0,7.3,3.48a4.07,4.07,0,0,0-1.2-.19,3.92,3.92,0,0,0-1.18.17,5.87,5.87,0,0,0-.9.37,3.37,3.37,0,0,0-.55.38l-.21.19a.32.32,0,0,0,0,.41l1,1.2a.26.26,0,0,0,.2.12.48.48,0,0,0,.24-.06L4.78,6a2.9,2.9,0,0,1,.29-.19l.4-.17A1.66,1.66,0,0,1,6,5.56a1.1,1.1,0,0,1,.72.24.72.72,0,0,1,.23.26A.77.77,0,0,1,7,6.4a1,1,0,0,1-.26.67,7.6,7.6,0,0,1-.64.63,6.28,6.28,0,0,0-.49.43,2.93,2.93,0,0,0-.45.54,2.72,2.72,0,0,0-.33.66,2.62,2.62,0,0,0-.13.83v.35a.43.43,0,0,0,0,.12.39.39,0,0,0,.08.1.18.18,0,0,0,.1.07.21.21,0,0,0,.12,0H6.72l.12,0a.23.23,0,0,0,.1-.07.36.36,0,0,0,.07-.1.5.5,0,0,0,0-.12V10.3a1,1,0,0,1,.27-.7A8,8,0,0,1,8,9c.18-.15.35-.31.52-.48A7,7,0,0,0,9,7.89a3.23,3.23,0,0,0,.36-.72,3.07,3.07,0,0,0,.13-1A2.66,2.66,0,0,0,9.15,5,2.58,2.58,0,0,0,8.39,4Z"/>` },
+    };
+    return icons[classification] || icons.good;
+  }
+
+  function clearMoveIcon() {
+    if (arrowOverlay) {
+      const existing = arrowOverlay.querySelector('.move-icon-group');
+      if (existing) existing.remove();
+    }
+  }
+
+  // Attempt to execute a move by injecting a <script> into the page context.
+  // Page-context JS can call Chess.com's internal APIs directly and dispatch trusted events.
+  // Returns true if an injection attempt was made (not guaranteed to succeed).
+  function tryPageContextMove(from, to, promotion) {
+    try {
+      const promoStr = promotion ? JSON.stringify(promotion) : 'null';
+      const script = document.createElement('script');
+      script.textContent = `
+(function() {
+  var from = ${JSON.stringify(from)}, to = ${JSON.stringify(to)}, promo = ${promoStr};
+  // Try wc-chess-board game API
+  var board = document.querySelector('wc-chess-board') || document.querySelector('chess-board');
+  if (!board) return;
+
+  // Attempt 1: .game.move()
+  try {
+    if (board.game && typeof board.game.move === 'function') {
+      board.game.move(from, to, promo);
+      return;
+    }
+  } catch(e) {}
+
+  // Attempt 2: Vue component controller
+  try {
+    var vc = board.__vue_app__
+      || board._vei
+      || board.__vueParentComponent
+      || (board.__vue__ && board.__vue__.$parent);
+    // Walk up to find a component with a makeMove / submitMove method
+    var comp = board.__vue_app__?.config?.globalProperties;
+    if (!comp) {
+      var el = board;
+      while (el) {
+        var vnode = el._vei || el.__vueParentComponent;
+        if (vnode) { comp = vnode.ctx || vnode.proxy; break; }
+        el = el.parentElement;
+      }
+    }
+    if (comp) {
+      var fn = comp.makeMove || comp.submitMove || comp.playMove || comp.move;
+      if (typeof fn === 'function') { fn.call(comp, from, to, promo); return; }
+    }
+  } catch(e) {}
+
+  // Attempt 3: Trusted pointer events via page context (bypasses isTrusted check)
+  try {
+    function squareToXY(sq, rect, flipped) {
+      var files = 'abcdefgh', f = files.indexOf(sq[0]), r = parseInt(sq[1]) - 1;
+      var sz = rect.width / 8;
+      var x, y;
+      if (flipped) { x = rect.left + (7 - f + 0.5) * sz; y = rect.top + (r + 0.5) * sz; }
+      else         { x = rect.left + (f + 0.5) * sz;     y = rect.top + (7 - r + 0.5) * sz; }
+      return { x: x, y: y };
+    }
+    var flipped = board.classList.contains('flipped') || board.getAttribute('board-orientation') === 'black';
+    var rect = board.getBoundingClientRect();
+    var fp = squareToXY(from, rect, flipped);
+    var tp = squareToXY(to, rect, flipped);
+    function fire(el, type, x, y, btns) {
+      el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, composed: true,
+        clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse',
+        isPrimary: true, button: 0, buttons: btns != null ? btns : 1
+      }));
+    }
+    var fromEl = document.elementFromPoint(fp.x, fp.y) || board;
+    fire(fromEl, 'pointerdown', fp.x, fp.y, 1);
+    fire(fromEl, 'pointerup',   fp.x, fp.y, 0);
+    fromEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: fp.x, clientY: fp.y }));
+    setTimeout(function() {
+      var toEl = document.elementFromPoint(tp.x, tp.y) || board;
+      fire(toEl, 'pointerdown', tp.x, tp.y, 1);
+      fire(toEl, 'pointerup',   tp.x, tp.y, 0);
+      toEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: tp.x, clientY: tp.y }));
+    }, 30);
+  } catch(e) {}
+})();
+      `;
+      document.head.appendChild(script);
+      script.remove();
+      console.log('[Chessist AutoMove] page-context script injected');
+      return true;
+    } catch (e) {
+      console.log('[Chessist AutoMove] page-context injection failed:', e);
+      return false;
+    }
   }
 
   // Execute a move on the board (auto-move feature)
@@ -289,8 +481,7 @@
       log('Chessist: Game API move failed:', e);
     }
 
-    // Method 2: Simulate mouse events on squares
-    // Check actual board visual state, not player color (manual override shouldn't affect coordinates)
+    // Method 2: Simulate drag via pointer events
     const isFlipped = board.classList?.contains('flipped') ||
                       board.getAttribute('data-flipped') === 'true' ||
                       board.hasAttribute('flipped') ||
@@ -298,26 +489,59 @@
     return simulateMove(board, fromSquare, toSquare, isFlipped, promotion);
   }
 
-  // Simulate a move by dispatching pointer/mouse events (drag and drop)
-  function simulateMove(board, from, to, isFlipped, promotion) {
-    // Find the piece on the from square
-    const pieceEl = findPieceOnSquare(board, from);
+  // Get the actual board surface element (inner .board inside wc-chess-board)
+  function getBoardSurface(board) {
+    return board.querySelector('.board') ||
+           board.shadowRoot?.querySelector('.board') ||
+           board;
+  }
 
+  // Fire a full click sequence (pointerdown + mousedown + pointerup + mouseup + click) at a point
+  function fireClickAt(target, x, y) {
+    const opts = (extra) => Object.assign({
+      bubbles: true, cancelable: true, view: window,
+      clientX: x, clientY: y, button: 0, buttons: 1
+    }, extra);
+
+    target.dispatchEvent(new PointerEvent('pointerdown', opts({ pointerId: 1, pointerType: 'mouse', isPrimary: true })));
+    target.dispatchEvent(new MouseEvent('mousedown', opts({})));
+    target.dispatchEvent(new PointerEvent('pointerup', opts({ pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 0 })));
+    target.dispatchEvent(new MouseEvent('mouseup', opts({ buttons: 0 })));
+    target.dispatchEvent(new MouseEvent('click', opts({ buttons: 0 })));
+  }
+
+  // Get pixel coordinates for a square center, using the actual board surface rect
+  function getSquarePixel(surface, square, isFlipped) {
+    const rect = surface.getBoundingClientRect();
+    const squareSize = rect.width / 8;
+    const { file, rank } = squareToIndices(square);
+
+    let x, y;
+    if (isFlipped) {
+      x = rect.left + (7 - file + 0.5) * squareSize;
+      y = rect.top + (rank + 0.5) * squareSize;
+    } else {
+      x = rect.left + (file + 0.5) * squareSize;
+      y = rect.top + (7 - rank + 0.5) * squareSize;
+    }
+    return { x, y };
+  }
+
+  // Simulate a move using drag (pointerdown on piece → pointermove → pointerup at destination).
+  function simulateMove(board, from, to, isFlipped, promotion) {
+    const pieceEl = findPieceOnSquare(board, from);
     if (!pieceEl) {
       log('Chessist: Could not find piece on', from);
       return false;
     }
 
-    // Get board rect for coordinate calculation
     const boardRect = board.getBoundingClientRect();
     const squareSize = boardRect.width / 8;
 
-    // Calculate from coordinates (piece center)
     const pieceRect = pieceEl.getBoundingClientRect();
     const fromX = pieceRect.left + pieceRect.width / 2;
     const fromY = pieceRect.top + pieceRect.height / 2;
 
-    // Calculate to coordinates based on square
     const { file: toFile, rank: toRank } = squareToIndices(to);
     let toX, toY;
     if (isFlipped) {
@@ -328,96 +552,21 @@
       toY = boardRect.top + (7 - toRank + 0.5) * squareSize;
     }
 
-    log(`Chessist: Simulating drag from (${fromX.toFixed(0)}, ${fromY.toFixed(0)}) to (${toX.toFixed(0)}, ${toY.toFixed(0)})`);
+    log(`Chessist: Simulating drag from (${fromX.toFixed(0)},${fromY.toFixed(0)}) to (${toX.toFixed(0)},${toY.toFixed(0)})`);
 
-    // Use pointer events (more reliable for modern web components)
-    const pointerDownEvent = new PointerEvent('pointerdown', {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: fromX,
-      clientY: fromY,
-      pointerId: 1,
-      pointerType: 'mouse',
-      isPrimary: true,
-      button: 0,
-      buttons: 1
-    });
+    pieceEl.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window, clientX: fromX, clientY: fromY, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1 }));
+    pieceEl.dispatchEvent(new MouseEvent('mousedown',     { bubbles: true, cancelable: true, view: window, clientX: fromX, clientY: fromY, button: 0, buttons: 1 }));
 
-    // Also create mouse events as fallback
-    const mouseDownEvent = new MouseEvent('mousedown', {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: fromX,
-      clientY: fromY,
-      button: 0,
-      buttons: 1
-    });
-
-    // Dispatch on piece element
-    pieceEl.dispatchEvent(pointerDownEvent);
-    pieceEl.dispatchEvent(mouseDownEvent);
-
-    // Simulate drag with pointermove/mousemove
     setTimeout(() => {
-      const pointerMoveEvent = new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX: toX,
-        clientY: toY,
-        pointerId: 1,
-        pointerType: 'mouse',
-        isPrimary: true,
-        button: 0,
-        buttons: 1
-      });
+      document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, view: window, clientX: toX, clientY: toY, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1 }));
+      document.dispatchEvent(new MouseEvent('mousemove',     { bubbles: true, cancelable: true, view: window, clientX: toX, clientY: toY, button: 0, buttons: 1 }));
 
-      const mouseMoveEvent = new MouseEvent('mousemove', {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX: toX,
-        clientY: toY,
-        button: 0,
-        buttons: 1
-      });
-
-      document.dispatchEvent(pointerMoveEvent);
-      document.dispatchEvent(mouseMoveEvent);
-
-      // Release the piece
       setTimeout(() => {
-        const pointerUpEvent = new PointerEvent('pointerup', {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX: toX,
-          clientY: toY,
-          pointerId: 1,
-          pointerType: 'mouse',
-          isPrimary: true,
-          button: 0
-        });
+        document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window, clientX: toX, clientY: toY, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0 }));
+        document.dispatchEvent(new MouseEvent('mouseup',     { bubbles: true, cancelable: true, view: window, clientX: toX, clientY: toY, button: 0 }));
 
-        const mouseUpEvent = new MouseEvent('mouseup', {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX: toX,
-          clientY: toY,
-          button: 0
-        });
-
-        document.dispatchEvent(pointerUpEvent);
-        document.dispatchEvent(mouseUpEvent);
-
-        // Handle promotion if needed
         if (promotion) {
-          setTimeout(() => {
-            handlePromotion(promotion);
-          }, 200);
+          setTimeout(() => handlePromotion(promotion), 200);
         }
       }, 50);
     }, 50);
@@ -982,6 +1131,209 @@
     return 'w';
   }
 
+  // Count consecutive identical results at the tail of history
+  function countConsecutive(history, result) {
+    let n = 0;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i] === result) n++;
+      else break;
+    }
+    return n;
+  }
+
+  // Effective threshold — optionally randomised between 1 and the base value
+  function effectiveThreshold(base, isRandom) {
+    if (!isRandom || base <= 1) return base;
+    return 1 + Math.floor(Math.random() * base); // 1 … base
+  }
+
+  // Detect the current player's ELO from Chess.com DOM
+  function detectPlayerElo() {
+    if (manualElo) return manualElo;
+    // Chess.com renders ratings near the board clocks; bottom player = current user
+    const selectors = [
+      '.board-player-default .user-tagline-rating',
+      '.board-player-default [class*="rating"]',
+      '[class*="board-player-default"] [class*="tagline-rating"]',
+      '.player-component [class*="rating"]',
+      '[class*="user-tagline"] [class*="rating"]',
+    ];
+    const isFlipped = !!document.querySelector('wc-chess-board.flipped, .board.flipped');
+    for (const sel of selectors) {
+      const els = [...document.querySelectorAll(sel)];
+      if (!els.length) continue;
+      // Bottom player is last element in normal orientation, first when flipped
+      const el = isFlipped ? els[0] : els[els.length - 1];
+      const m = el.textContent.trim().match(/\d{3,4}/);
+      if (m) return parseInt(m[0]);
+    }
+    return null;
+  }
+
+  // Record game result and update throw/win flags for next game
+  async function recordGameResult(result) {
+    if (gameOverHandled) return;
+    gameOverHandled = true;
+    log(`Chessist: Game over - result: ${result}`);
+
+    try {
+      const local = await chrome.storage.local.get(['gameHistory']);
+      const history = local.gameHistory || [];
+      history.push(result);
+      if (history.length > 30) history.shift();
+
+      let throwNext = false;
+      let winNext = false;
+      if (wlBalance) {
+        const consecWins = countConsecutive(history, 'w');
+        const consecLosses = countConsecutive(history, 'l');
+        const winThreshold = effectiveThreshold(maxConsecutiveWins, throwRandom);
+        const lossThreshold = effectiveThreshold(maxConsecutiveLosses, lossRandom);
+        throwNext = consecWins >= winThreshold;
+        winNext = consecLosses >= lossThreshold;
+        log(`Chessist: W${consecWins}/${winThreshold} L${consecLosses}/${lossThreshold} → throw:${throwNext} win:${winNext}`);
+      }
+
+      await chrome.storage.local.set({ gameHistory: history, shouldThrowNextGame: throwNext, shouldWinNextGame: winNext });
+    } catch (e) {
+      // Storage error - not critical
+    }
+  }
+
+  // Watch for Chess.com game-over modal and record result
+  function watchForGameOver() {
+    let checkInterval = null;
+
+    function checkResult() {
+      if (gameOverHandled) {
+        clearInterval(checkInterval);
+        return;
+      }
+      // Chess.com uses various class names across versions - try a broad set
+      const candidates = [
+        document.querySelector('.result-message'),
+        document.querySelector('.game-result-component'),
+        document.querySelector('.game-over-message-component'),
+        document.querySelector('[class*="game-over-message"]'),
+        document.querySelector('[class*="result-message"]'),
+        document.querySelector('[class*="game-result"]'),
+      ];
+      for (const el of candidates) {
+        if (!el) continue;
+        const text = el.textContent.toLowerCase();
+        if (text.includes('you won') || text.includes('victory')) {
+          recordGameResult('w');
+          clearInterval(checkInterval);
+          return;
+        }
+        if (text.includes('you lost') || text.includes('defeat') || text.includes('you lose')) {
+          recordGameResult('l');
+          clearInterval(checkInterval);
+          return;
+        }
+        if (text.includes('draw') || text.includes('stalemate') || text.includes('repetition') || text.includes('agreement')) {
+          recordGameResult('d');
+          clearInterval(checkInterval);
+          return;
+        }
+      }
+    }
+
+    // Poll every second — game-over modal appears after the final move
+    checkInterval = setInterval(checkResult, 1000);
+
+    // Also watch DOM for the modal appearing
+    const observer = new MutationObserver(checkResult);
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // Win probability from centipawns (Lichess formula)
+  function winPercent(cp) {
+    return 100 / (1 + Math.exp(-0.00368208 * cp));
+  }
+
+  // Accuracy of a single move (Chess.com formula)
+  // prevCp and newCp are both from the player's perspective
+  function calculateMoveAccuracy(prevCp, newCp) {
+    const winBefore = winPercent(prevCp);
+    const winAfter = winPercent(newCp);
+    const winLoss = Math.max(0, winBefore - winAfter);
+    return Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * winLoss) - 3.1669));
+  }
+
+  // Classify a move by accuracy into Chess.com categories
+  function classifyMove(accuracy, playedBestMove) {
+    if (playedBestMove || accuracy >= 99) return 'best';
+    if (accuracy >= 90) return 'excellent';
+    if (accuracy >= 75) return 'good';
+    if (accuracy >= 60) return 'inaccuracy';
+    if (accuracy >= 40) return 'mistake';
+    return 'blunder';
+  }
+
+  function accuracyColorClass(pct) {
+    if (pct >= 90) return 'accuracy-great';
+    if (pct >= 70) return 'accuracy-good';
+    if (pct >= 50) return 'accuracy-ok';
+    return 'accuracy-poor';
+  }
+
+  let accuracyIconSvg = null;
+  async function getAccuracyIcon() {
+    if (accuracyIconSvg) return accuracyIconSvg;
+    try {
+      const url = chrome.runtime.getURL('icons/accuracy.svg');
+      const resp = await fetch(url);
+      const text = await resp.text();
+      // Strip width/height/style from svg tag so it sizes via CSS
+      accuracyIconSvg = text.replace(/style="[^"]*"/, '').replace(/<svg /, '<svg ');
+    } catch (e) {
+      accuracyIconSvg = '';
+    }
+    return accuracyIconSvg;
+  }
+
+  function updateAccuracyDisplay(accuracy, playedBestMove) {
+    if (accuracyEl && moveAccuracies.length > 0) {
+      const avg = moveAccuracies.reduce((a, b) => a + b, 0) / moveAccuracies.length;
+      const avgPct = avg.toFixed(1);
+      const colorClass = accuracyColorClass(avg);
+      getAccuracyIcon().then(svgHtml => {
+        if (!accuracyEl) return;
+        const wrappedIcon = svgHtml
+          ? `<span class="acc-icon ${colorClass}">${svgHtml}</span>`
+          : '';
+        accuracyEl.innerHTML = wrappedIcon + `<span class="acc-last ${colorClass}">${avgPct}%</span>`;
+        accuracyEl.className = 'chess-live-eval-accuracy';
+        accuracyEl.style.display = 'flex';
+      });
+    }
+  }
+
+  function getGameId() {
+    return location.href.match(/\/(?:live|daily)\/(\d+)/)?.[1] || null;
+  }
+
+  function saveAccuracyState() {
+    const gameId = getGameId();
+    if (!gameId || moveAccuracies.length === 0) return;
+    chrome.storage.local.set({ [`accuracy_${gameId}`]: { accuracies: moveAccuracies, prevCpWhite } }).catch(() => {});
+  }
+
+  async function restoreAccuracyState() {
+    const gameId = getGameId();
+    if (!gameId) return;
+    const key = `accuracy_${gameId}`;
+    const result = await chrome.storage.local.get(key).catch(() => ({}));
+    if (result[key]) {
+      moveAccuracies = result[key].accuracies || [];
+      prevCpWhite = result[key].prevCpWhite ?? null;
+      if (moveAccuracies.length > 0) updateAccuracyDisplay(moveAccuracies[moveAccuracies.length - 1]);
+      log('Chessist: Restored accuracy state', moveAccuracies.length, 'moves');
+    }
+  }
+
+
   // Create evaluation bar element
   function createEvalBar(board) {
     // Check if already created
@@ -1033,12 +1385,18 @@
       turnIndicatorEl.className = 'chess-live-eval-turn';
       turnIndicatorEl.textContent = '';
 
+      // Create accuracy display
+      accuracyEl = document.createElement('div');
+      accuracyEl.className = 'chess-live-eval-accuracy';
+      accuracyEl.style.display = 'none';
+
       evalBar.appendChild(evalBarFill);
       evalBar.appendChild(evalScore);
       evalBar.appendChild(depthEl);
       evalBar.appendChild(bestMoveEl);
       evalBar.appendChild(countdownEl);
       evalBar.appendChild(turnIndicatorEl);
+      evalBar.appendChild(accuracyEl);
 
       return;
     }
@@ -1106,12 +1464,18 @@
     turnIndicatorEl.className = 'chess-live-eval-turn';
     turnIndicatorEl.textContent = '';
 
+    // Create accuracy display
+    accuracyEl = document.createElement('div');
+    accuracyEl.className = 'chess-live-eval-accuracy';
+    accuracyEl.style.display = 'none';
+
     evalBar.appendChild(evalBarFill);
     evalBar.appendChild(evalScore);
     evalBar.appendChild(depthEl);
     evalBar.appendChild(bestMoveEl);
     evalBar.appendChild(countdownEl);
     evalBar.appendChild(turnIndicatorEl);
+    evalBar.appendChild(accuracyEl);
 
     // Insert eval bar
     let insertParent = board.parentElement;
@@ -1173,10 +1537,19 @@
       rawCp = -rawCp;
     }
 
-    
+
     // Now rawCp and rawMate are from WHITE's perspective
     // Positive = white winning, Negative = black winning
-    
+
+    // Store eval for accuracy calculation: capture when player's eval is sufficiently deep
+    const isPlayerTurnForEval = playerColor && evalTurn === playerColor;
+    if (evaluation.depth >= targetDepth && isPlayerTurnForEval) {
+      prevCpWhite = rawMate !== undefined
+        ? (rawMate > 0 ? 10000 : -10000)
+        : rawCp;
+      prevBestMove = evaluation.bestMove || null;
+    }
+
     // Flip everything if player is black (bar and score)
     const viewFromBlack = playerColor === 'b';
     let displayMate = rawMate;
@@ -1267,7 +1640,7 @@
 
         // Draw arrow on board only at target depth to avoid flickering
         if (evaluation.depth >= targetDepth && isPlayerTurn) {
-          drawBestMoveArrow(move);
+          drawBestMoveArrow(move, evaluation.multiPvMoves);
         } else if (!isPlayerTurn) {
           // Clear arrow when it's opponent's turn
           clearArrow();
@@ -1299,21 +1672,49 @@
         evalMatchesCurrent = evalPosition === currentPosition;
       }
 
-      // Only auto-move on player's turn, if eval matches current position,
-      // and if we haven't already moved for this position+turn
       const positionKey = currentFen ? currentFen.split(' ').slice(0, 2).join(' ') : null;
+
+      // Only auto-move on player's turn, if eval matches current position,
+      // and if we haven't already triggered a move for this position+turn
       if (isPlayerTurn && evalMatchesCurrent && positionKey && positionKey !== lastAutoMovePosition) {
         lastAutoMovePosition = positionKey;  // Mark this position+turn as processed
 
-        // Skill-based move selection: lower skill = chance to pick suboptimal move
+        // Move selection: win mode > throw mode > targetAccuracy > skillLevel
         let moveToPlay = evaluation.bestMove;
-        if (skillLevel < 20 && evaluation.pv && evaluation.pv.length > 1) {
-          // At lower skill levels, sometimes pick a worse move from PV
-          // Chance to "blunder" increases as skill decreases
-          const blunderChance = (20 - skillLevel) / 25; // 0% at skill 20, 76% at skill 1
+        const pv = evaluation.pv || [];
+
+        if (shouldWinThisGame) {
+          // Win mode: always play the best move, no degradation
+          // moveToPlay is already bestMove — nothing to do
+          log('Chessist: Win mode - playing best move');
+        } else if (shouldThrowThisGame && pv.length >= 3) {
+          // Throw mode: pick one of our own moves from deep in the PV.
+          // Our moves are at even PV indices (0, 2, 4, ...); skip index 0 (best).
+          const ourPvMoves = pv.filter((_, i) => i % 2 === 0);
+          if (ourPvMoves.length >= 2) {
+            const throwIdx = Math.min(ourPvMoves.length - 1,
+              1 + Math.floor(Math.random() * Math.max(1, ourPvMoves.length - 1)));
+            moveToPlay = ourPvMoves[throwIdx];
+            log('Chessist: Throw mode - playing PV even-index', throwIdx * 2, ':', moveToPlay);
+          }
+        } else if (targetAccuracy < 100 && pv.length > 1) {
+          // Accuracy-based deviation: (100 - accuracy)% chance to pick a worse move
+          const deviationChance = (100 - targetAccuracy) / 100;
+          if (Math.random() < deviationChance) {
+            const maxIdx = Math.min(pv.length - 1, Math.ceil((100 - targetAccuracy) / 15));
+            // Only pick our moves (even indices), skip index 0
+            const ourMoves = pv.filter((_, i) => i % 2 === 0);
+            const pick = Math.min(ourMoves.length - 1, 1 + Math.floor(Math.random() * maxIdx));
+            if (pick > 0 && ourMoves[pick]) {
+              moveToPlay = ourMoves[pick];
+              log('Chessist: Target accuracy', targetAccuracy, '% - deviating to PV move', pick);
+            }
+          }
+        } else if (skillLevel < 20 && pv.length > 1) {
+          // Skill-based move selection (existing behaviour, only when accuracy target is off)
+          const blunderChance = (20 - skillLevel) / 25;
           if (Math.random() < blunderChance) {
-            // Pick a random move from PV (weighted towards better moves)
-            const pvMoves = evaluation.pv;
+            const pvMoves = pv;
             const maxIndex = Math.min(pvMoves.length - 1, Math.ceil((20 - skillLevel) / 4));
             const pickIndex = Math.floor(Math.random() * (maxIndex + 1));
             if (pickIndex > 0 && pvMoves[pickIndex]) {
@@ -1556,6 +1957,42 @@
               return;
             }
           }
+
+          // Calculate move accuracy from ongoing eval on opponent's turn
+          if (accuracyEvalPending) {
+            const ev = message.evaluation;
+            if (ev.depth >= ACCURACY_EVAL_DEPTH) {
+              // Normalize to white's perspective
+              const et = ev.turn || 'w';
+              let newCpWhite;
+              if (ev.mate !== undefined) {
+                const mateSigned = et === 'b' ? -ev.mate : ev.mate;
+                newCpWhite = mateSigned > 0 ? 10000 : -10000;
+              } else {
+                newCpWhite = et === 'b' ? -(ev.cp || 0) : (ev.cp || 0);
+              }
+
+              if (prevCpWhite !== null) {
+                const playerBefore = playerColor === 'b' ? -prevCpWhite : prevCpWhite;
+                const playerAfter  = playerColor === 'b' ? -newCpWhite  : newCpWhite;
+                const accuracy = calculateMoveAccuracy(playerBefore, playerAfter);
+                moveAccuracies.push(accuracy);
+                updateAccuracyDisplay(accuracy, accuracy >= 99);
+                saveAccuracyState();
+                // Draw move icon on the board at the destination square
+                if (lastMoveToSquare) {
+                  const cls = classifyMove(accuracy, accuracy >= 99);
+                  drawMoveIconOnBoard(lastMoveToSquare, cls);
+                }
+                log(`Chessist: Move accuracy ${accuracy.toFixed(1)}% (before cp ${prevCpWhite}, after cp ${newCpWhite})`);
+              }
+
+              accuracyEvalPending = false;
+              // Don't stop analysis — let the eval session continue normally
+            }
+            // Fall through to updateEval so the bar stays current
+          }
+
           updateEval(message.evaluation);
         }
       } catch (e) {
@@ -1591,6 +2028,7 @@
       if (fen === currentFen) return;
 
       currentFen = fen;
+      lastAutoMovePosition = null;  // New position — allow auto-move to trigger fresh
 
       // Always detect player color from board orientation (reliable, doesn't depend on shadow DOM)
       const isFlipped = board.classList?.contains('flipped') ||
@@ -1610,6 +2048,11 @@
       if (isNewGameLoad) {
         lastAutoMovePosition = null;
         hideCountdown();
+        prevCpWhite = null;
+        moveAccuracies = [];
+        accuracyEvalPending = false;
+        if (accuracyEl) { accuracyEl.style.display = 'none'; accuracyEl.innerHTML = ''; }
+        clearMoveIcon();
         if (extensionContextValid && checkExtensionContext()) {
           chrome.runtime.sendMessage({ type: 'RESET_ENGINE' }).catch(() => {});
         }
@@ -1714,6 +2157,38 @@
           hideCountdown();
           currentBestMove = null;
 
+          // Reset accuracy state
+          const oldGameId = getGameId();
+          if (oldGameId) chrome.storage.local.remove(`accuracy_${oldGameId}`).catch(() => {});
+          prevCpWhite = null;
+          moveAccuracies = [];
+          accuracyEvalPending = false;
+          if (accuracyEl) { accuracyEl.style.display = 'none'; accuracyEl.innerHTML = ''; }
+          clearMoveIcon();
+
+          // Set throw/win mode for this game based on flags from previous game
+          gameOverHandled = false;
+          chrome.storage.local.get(['shouldThrowNextGame', 'shouldWinNextGame']).then(local => {
+            shouldThrowThisGame = wlBalance && local.shouldThrowNextGame === true;
+            shouldWinThisGame   = wlBalance && local.shouldWinNextGame  === true;
+            // Consume flags
+            chrome.storage.local.set({ shouldThrowNextGame: false, shouldWinNextGame: false });
+            if (shouldThrowThisGame) log('Chessist: THROW MODE active for this game');
+            if (shouldWinThisGame)   log('Chessist: WIN MODE active for this game');
+
+            // Apply ELO matching for this game
+            if (matchElo) {
+              const elo = detectPlayerElo();
+              if (elo) {
+                log('Chessist: Sending ELO', elo, 'to engine');
+                chrome.storage.local.set({ detectedElo: elo });
+                if (extensionContextValid && checkExtensionContext()) {
+                  chrome.runtime.sendMessage({ type: 'SET_ELO', elo }).catch(() => {});
+                }
+              }
+            }
+          }).catch(() => {});
+
           // Reset eval bar visual state
           if (evalBarFill) evalBarFill.style.setProperty('height', '50%', 'important');
           if (evalScore) { evalScore.textContent = '0.0'; evalScore.className = 'chess-live-eval-score equal'; }
@@ -1773,19 +2248,43 @@
         const isMyTurn = !playerColor || currentTurn === playerColor;
 
         if (isMyTurn) {
-          // Player's turn - request evaluation
-          // Delay slightly after new game reset so engine is ready
+          // Player's turn - cancel any pending accuracy eval, request regular eval
+          accuracyEvalPending = false;
+          clearMoveIcon();
           const evalDelay = isNewGame ? 500 : 0;
           evalBar?.classList.add('loading');
           setTimeout(() => requestEval(fenForEval, isMouseRelease), evalDelay);
         } else {
-          // Opponent's turn - stop any ongoing analysis to save resources
+          // Opponent's turn — request eval for accuracy calculation and bar update
           hideCountdown();
-          evalBar?.classList.remove('loading');
-          if (extensionContextValid && checkExtensionContext()) {
-            chrome.runtime.sendMessage({ type: 'STOP_ANALYSIS' }).catch(() => {});
+          evalBar?.classList.add('loading');
+          if (prevCpWhite !== null) {
+            accuracyEvalPending = true;
+            // Find the destination square: the highlighted square that currently has a piece on it
+            lastMoveToSquare = null;
+            const board = findBoard();
+            if (board) {
+              const root = board.shadowRoot || board;
+              const highlights = root.querySelectorAll('[class*="highlight"][class*="square-"]');
+              for (const hl of highlights) {
+                const m = hl.className.match(/square-(\d+)/);
+                if (!m) continue;
+                const sq = parseInt(m[1]);
+                const sqClass = `square-${sq}`;
+                // The TO square has a piece on it; the FROM square is empty
+                const hasPiece = root.querySelector(`.piece.${sqClass}`);
+                if (hasPiece) {
+                  const file = Math.floor(sq / 10) - 1;
+                  const rank = (sq % 10) - 1;
+                  lastMoveToSquare = String.fromCharCode(97 + file) + (rank + 1);
+                  break;
+                }
+              }
+            }
+            log('Chessist: Opponent turn - accuracy pending, to square:', lastMoveToSquare);
           }
-          log('Chessist: Opponent turn - skipping evaluation');
+          // Request eval for opponent's position (used by accuracy calc and bar)
+          requestEval(fenForEval, isMouseRelease);
         }
       }
     }, isMouseRelease ? 50 : 200); // Shorter debounce for mouse release
@@ -1796,6 +2295,8 @@
     await loadSettings();
 
     if (!isEnabled) return;
+
+    await restoreAccuracyState();
 
     // Reset engine state on page load to clear any stale data
     if (extensionContextValid && checkExtensionContext()) {
@@ -1823,6 +2324,18 @@
     };
 
     checkForBoard();
+    watchForGameOver();
+
+    // Try to detect and publish ELO immediately (player may already be in a game)
+    if (matchElo) {
+      setTimeout(() => {
+        const elo = detectPlayerElo();
+        if (elo && extensionContextValid && checkExtensionContext()) {
+          chrome.storage.local.set({ detectedElo: elo });
+          chrome.runtime.sendMessage({ type: 'SET_ELO', elo }).catch(() => {});
+        }
+      }, 2000); // wait for Chess.com DOM to settle
+    }
 
     // Also observe for navigation (Chess.com is a SPA)
     const pageObserver = new MutationObserver(() => {
@@ -1948,6 +2461,10 @@
               clearArrow();
             }
           }
+          if (message.showMoveIcon !== undefined) {
+            showMoveIcon = message.showMoveIcon;
+            if (!showMoveIcon) clearMoveIcon();
+          }
           // Update autoMove if provided
           if (message.autoMove !== undefined) {
             autoMove = message.autoMove;
@@ -2012,6 +2529,28 @@
             skillLevel = message.skillLevel;
             log('Chessist: Skill level updated to', skillLevel);
           }
+          if (message.targetAccuracy !== undefined) {
+            targetAccuracy = message.targetAccuracy;
+            log('Chessist: Target accuracy set to', targetAccuracy);
+          }
+          if (message.wlBalance !== undefined) {
+            wlBalance = message.wlBalance;
+            if (!wlBalance) { shouldThrowThisGame = false; shouldWinThisGame = false; }
+          }
+          if (message.maxConsecutiveWins !== undefined) maxConsecutiveWins = message.maxConsecutiveWins;
+          if (message.maxConsecutiveLosses !== undefined) maxConsecutiveLosses = message.maxConsecutiveLosses;
+          if (message.throwRandom !== undefined) throwRandom = message.throwRandom;
+          if (message.lossRandom !== undefined) lossRandom = message.lossRandom;
+          if (message.matchElo !== undefined) {
+            matchElo = message.matchElo;
+            if (!matchElo) {
+              // Disable ELO limiting on engine
+              if (extensionContextValid && checkExtensionContext()) {
+                chrome.runtime.sendMessage({ type: 'SET_ELO', elo: null }).catch(() => {});
+              }
+            }
+          }
+          if (message.manualElo !== undefined) manualElo = message.manualElo;
         } else if (message.type === 'RE_EVALUATE') {
           // Engine switched - trigger re-evaluation of current position
           if (currentFen && isEnabled) {

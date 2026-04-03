@@ -33,6 +33,18 @@
         </div>
       </div>
 
+      <label class="toggle">
+        <input type="checkbox" id="matchElo">
+        <span class="slider"></span>
+        <span class="label">Match Player ELO <span class="tooltip" data-tip="Stockfish plays at your rating level">?</span></span>
+      </label>
+      <div class="elo-settings" id="eloSettings">
+        <div class="elo-row">
+          <span class="elo-status-text" id="eloStatusText">Auto-detect from Chess.com</span>
+          <input type="number" id="manualElo" min="100" max="3200" placeholder="Override" class="small-input elo-input" title="Manual ELO override (leave empty for auto-detect)">
+        </div>
+      </div>
+
       <div class="setting-row">
         <span class="setting-label">Analysis Depth <span class="tooltip" data-tip="Higher depth = stronger but slower">?</span></span>
         <div class="depth-control">
@@ -48,12 +60,18 @@
       </label>
 
       <label class="toggle">
+        <input type="checkbox" id="showMoveIcon">
+        <span class="slider"></span>
+        <span class="label">Show Move Icon</span>
+      </label>
+
+      <label class="toggle">
         <input type="checkbox" id="autoMove">
         <span class="slider"></span>
         <span class="label">Auto Move</span>
       </label>
 
-      <div id="autoMoveSettings" class="auto-move-settings hidden">
+      <div id="autoMoveSettings" class="auto-move-settings">
         <div class="setting-row compact" id="delaySettings">
           <span class="setting-label">Delay (sec)</span>
           <div class="delay-right">
@@ -74,6 +92,46 @@
           <span class="slider"></span>
           <span class="label">Smart Timing <span class="tooltip" data-tip="Adjusts delay based on move complexity">?</span></span>
         </label>
+
+        <div class="am-sub-divider"></div>
+
+        <div class="setting-row compact">
+          <span class="setting-label">Target Accuracy <span class="tooltip" data-tip="Intentionally play at lower accuracy">?</span></span>
+          <div class="acc-toggle" id="accToggle">
+            <button type="button" class="acc-btn active" data-acc="100">Off</button>
+            <button type="button" class="acc-btn" data-acc="90">90%</button>
+            <button type="button" class="acc-btn" data-acc="80">80%</button>
+            <button type="button" class="acc-btn" data-acc="70">70%</button>
+            <button type="button" class="acc-btn" data-acc="60">60%</button>
+          </div>
+        </div>
+
+        <label class="toggle sub-toggle">
+          <input type="checkbox" id="wlBalance">
+          <span class="slider"></span>
+          <span class="label">Balance W/L <span class="tooltip" data-tip="Throw a game after winning too many in a row">?</span></span>
+        </label>
+        <div id="wlSettings" class="wl-settings">
+          <div class="setting-row compact">
+            <span class="setting-label">Wins before throw</span>
+            <div class="threshold-control">
+              <input type="number" id="maxConsecutiveWins" min="1" max="10" value="2" class="small-input">
+              <button type="button" id="throwRndBtn" class="rnd-btn" title="Randomise threshold each time">Rnd</button>
+            </div>
+          </div>
+          <div class="setting-row compact">
+            <span class="setting-label">Losses before win</span>
+            <div class="threshold-control">
+              <input type="number" id="maxConsecutiveLosses" min="1" max="10" value="3" class="small-input">
+              <button type="button" id="lossRndBtn" class="rnd-btn" title="Randomise threshold each time">Rnd</button>
+            </div>
+          </div>
+          <div class="game-history-row">
+            <div class="game-history-dots" id="gameHistoryDisplay"></div>
+            <div id="throwIndicator" class="throw-indicator hidden">THROW</div>
+            <div id="winIndicator" class="win-indicator hidden">WIN</div>
+          </div>
+        </div>
       </div>
 
       <div class="toggle-group">

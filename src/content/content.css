@@ -11,7 +11,6 @@
   height: 100% !important;
   background: #000 !important;
   border-radius: 4px !important;
-  overflow: hidden !important;
 }
 
 /* Fallback custom eval bar */
@@ -22,7 +21,6 @@
   width: 26px;
   background: #000;
   border-radius: 4px;
-  overflow: hidden;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   z-index: 100;
 }
@@ -179,6 +177,8 @@
   50% { opacity: 1; }
 }
 
+/* Move classification icon is rendered in the board SVG overlay — no bar element needed */
+
 /* Best move arrow overlay */
 .chess-live-eval-arrow-overlay {
   position: absolute;
@@ -194,8 +194,12 @@
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
 }
 
-/* Turn indicator (debug) - shows Turn/Player */
+/* Turn indicator (debug) - hidden by default */
 .chess-live-eval-turn {
+  display: none !important;
+}
+
+.chess-live-eval-turn-visible {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -210,10 +214,61 @@
   white-space: nowrap;
   z-index: 15;
   cursor: help;
-  margin-top: 20px;
+  margin-top: 32px;
 }
 
 .chess-live-eval-turn.my-turn {
   color: #792A9E;
   background: rgba(0, 0, 0, 0.8);
+}
+
+/* Accuracy display — horizontal row centered in eval bar */
+.chess-live-eval-accuracy {
+  position: absolute;
+  left: -80%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  z-index: 10;
+  cursor: help;
+  white-space: nowrap;
+}
+
+.chess-live-eval-accuracy .acc-icon {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.chess-live-eval-accuracy .acc-icon svg {
+  width: 10px;
+  height: 10px;
+}
+
+.chess-live-eval-accuracy .acc-last {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-weight: 700;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.acc-last.accuracy-great, .acc-icon.accuracy-great {
+  color: #4cc85a;
+}
+
+.acc-last.accuracy-good, .acc-icon.accuracy-good {
+  color: #8cd246;
+}
+
+.acc-last.accuracy-ok, .acc-icon.accuracy-ok {
+  color: #f0b932;
+}
+
+.acc-last.accuracy-poor, .acc-icon.accuracy-poor {
+  color: #d23c3c;
 }

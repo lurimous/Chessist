@@ -11,6 +11,9 @@ let analysisRunning = false;
 let pendingTimeoutOuter = null;  // Track pending timeouts to cancel on new requests
 let pendingTimeoutInner = null;
 
+// MultiPV tracking — holds best result seen so far for each PV slot (1-indexed)
+let multiPvResults = {};
+
 // Initialize Stockfish engine
 async function initEngine() {
   try {
@@ -69,8 +72,8 @@ function handleEngineMessage(event) {
 
   // Engine is ready
   if (message === 'uciok') {
-    console.log('Chessist Offscreen: UCI OK, sending isready');
-    // Don't set options - use defaults (this WASM build has fixed limits anyway)
+    console.log('Chessist Offscreen: UCI OK, setting MultiPV and sending isready');
+    stockfish.postMessage('setoption name MultiPV value 3');
     stockfish.postMessage('isready');
   }
 
@@ -90,14 +93,23 @@ function handleEngineMessage(event) {
   if (message.startsWith('info depth')) {
     const evaluation = parseInfoLine(message);
     if (evaluation && evaluation.depth >= 5) {
+      const slot = evaluation.multipv || 1;
+      // Store best result for this slot (overwrite with each new depth line)
+      multiPvResults[slot] = evaluation;
+
+      // Only broadcast on slot 1 (primary evaluation)
+      if (slot !== 1) return;
+
       // Include the FEN so content script knows which position this eval is for
-      // Use analysisFen (set when go command was issued) to avoid race conditions
       evaluation.fen = analysisFen;
-      // Extract turn from FEN (2nd part)
       const fenParts = analysisFen ? analysisFen.split(' ') : [];
       evaluation.turn = fenParts[1] || 'w';
 
-      // Send intermediate updates for depth >= 5
+      // Attach first moves from each MultiPV slot as multiPvMoves array
+      evaluation.multiPvMoves = [1, 2, 3]
+        .map(i => multiPvResults[i]?.pv?.[0])
+        .filter(Boolean);
+
       chrome.runtime.sendMessage({
         type: 'EVAL_UPDATE',
         evaluation: evaluation
@@ -129,6 +141,12 @@ function parseInfoLine(line) {
     evaluation.depth = parseInt(depthMatch[1]);
   }
 
+  // Extract MultiPV slot index
+  const multipvMatch = line.match(/\bmultipv (\d+)/);
+  if (multipvMatch) {
+    evaluation.multipv = parseInt(multipvMatch[1]);
+  }
+
   // Extract score
   const cpMatch = line.match(/score cp (-?\d+)/);
   const mateMatch = line.match(/score mate (-?\d+)/);
@@ -149,6 +167,9 @@ function parseInfoLine(line) {
   const pvMatch = line.match(/ pv (.+)$/);
   if (pvMatch) {
     evaluation.pv = pvMatch[1].split(' ');
+    if (evaluation.pv.length > 0) {
+      evaluation.bestMove = evaluation.pv[0];
+    }
   }
 
   return (evaluation.cp !== undefined || evaluation.mate !== undefined) ? evaluation : null;
@@ -199,6 +220,8 @@ function evaluatePosition(fen) {
     pendingTimeoutOuter = null;
     // Set analysisFen now - this is the FEN we're actually analyzing
     analysisFen = fen;
+    // Clear MultiPV results for previous position
+    multiPvResults = {};
     // Set position and analyze (hash table is preserved for faster convergence)
     stockfish.postMessage('position fen ' + fen);
     stockfish.postMessage('go depth ' + currentDepth);
@@ -242,6 +265,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       analysisFen = null;
     }
     sendResponse({ status: 'reset' });
+  } else if (message.type === 'SET_ELO') {
+    if (stockfish) {
+      if (message.elo) {
+        stockfish.postMessage('setoption name UCI_LimitStrength value true');
+        stockfish.postMessage(`setoption name UCI_Elo value ${message.elo}`);
+        console.log('Chessist Offscreen: ELO set to', message.elo);
+      } else {
+        stockfish.postMessage('setoption name UCI_LimitStrength value false');
+      }
+    }
+    sendResponse({ status: 'ok' });
   }
   return true;
 });

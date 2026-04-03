@@ -467,6 +467,7 @@ function handleNativeMessage(message) {
     const fenParts = analysisEvalFen.split(' ');
     lastEvaluation.turn = fenParts[1] || 'w';
     lastEvaluation.fen = analysisEvalFen;
+    // multiPvMoves is already set by the Python host (slot-1 only messages)
 
     broadcastToContentScripts({
       type: 'EVAL_RESULT',
@@ -577,6 +578,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'EXECUTE_MOVE') {
+    const tabId = sender.tab?.id;
+    if (!tabId) { sendResponse({ success: false, error: 'No tabId' }); return true; }
+
+    chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: (from, to, promo) => {
+        const board = document.querySelector('wc-chess-board') || document.querySelector('chess-board');
+        if (!board) return false;
+
+        const files = 'abcdefgh';
+        const isFlipped = board.classList.contains('flipped') || board.getAttribute('board-orientation') === 'black';
+
+        // Use inner .board element if available (inside shadow root), else outer board
+        const surface = board.querySelector('.board')
+                     || board.shadowRoot?.querySelector('.board')
+                     || board;
+        const rect = surface.getBoundingClientRect();
+        const sz = rect.width / 8;
+
+        function sqPx(sq) {
+          const f = files.indexOf(sq[0]), r = parseInt(sq[1]) - 1;
+          const x = isFlipped ? rect.left + (7 - f + 0.5) * sz : rect.left + (f + 0.5) * sz;
+          const y = isFlipped ? rect.top + (r + 0.5) * sz      : rect.top + (7 - r + 0.5) * sz;
+          return { x, y };
+        }
+
+        function fireClick(x, y) {
+          const el = document.elementFromPoint(x, y) || board;
+          el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1 }));
+          el.dispatchEvent(new MouseEvent('mousedown',     { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 1 }));
+          el.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 0 }));
+          el.dispatchEvent(new MouseEvent('mouseup',       { bubbles: true, clientX: x, clientY: y, button: 0, buttons: 0 }));
+          el.dispatchEvent(new MouseEvent('click',         { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+        }
+
+        const fp = sqPx(from), tp = sqPx(to);
+
+        // Click FROM square to select piece
+        fireClick(fp.x, fp.y);
+
+        // Click TO square to place piece
+        setTimeout(() => fireClick(tp.x, tp.y), 100);
+
+        return true;
+      },
+      args: [message.from, message.to, message.promotion || null]
+    }).then(() => sendResponse({ success: true }))
+      .catch(e => {
+        console.error('Chessist SW: executeScript failed:', e.message);
+        sendResponse({ success: false, error: e.message });
+      });
+    return true;
+  }
+
   if (message.type === 'EVAL_UPDATE') {
     // Check if this evaluation is for the current position
     if (message.evaluation.fen && currentEvalFen) {
@@ -669,6 +726,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Forward skill level to native Stockfish (UCI option)
     if (engineSource === 'native' && nativePort) {
       sendToNativePort({ type: 'set_option', name: 'Skill Level', value: message.level });
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.type === 'SET_ELO') {
+    const elo = message.elo; // null = disable ELO limiting
+    if (engineSource === 'native' && nativePort) {
+      if (elo) {
+        sendToNativePort({ type: 'set_option', name: 'UCI_LimitStrength', value: 'true' });
+        sendToNativePort({ type: 'set_option', name: 'UCI_Elo', value: elo });
+        console.log('Chessist SW: Set native ELO to', elo);
+      } else {
+        sendToNativePort({ type: 'set_option', name: 'UCI_LimitStrength', value: 'false' });
+      }
+    } else {
+      // WASM engine via offscreen document
+      chrome.runtime.sendMessage({ type: 'SET_ELO', elo }).catch(() => {});
     }
     sendResponse({ success: true });
     return true;

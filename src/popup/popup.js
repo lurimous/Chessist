@@ -3,6 +3,7 @@
 document.addEventListener('DOMContentLoaded', async () => {
   const enableToggle = document.getElementById('enableToggle');
   const showBestMove = document.getElementById('showBestMove');
+  const showMoveIconToggle = document.getElementById('showMoveIcon');
   const engineDepth = document.getElementById('engineDepth');
   const depthValue = document.getElementById('depthValue');
   const currentEval = document.getElementById('currentEval');
@@ -16,13 +17,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const copyIdBtn = document.getElementById('copyIdBtn');
   const extensionIdEl = document.getElementById('extensionId');
   const autoMoveToggle = document.getElementById('autoMove');
-  const autoMoveSettings = document.getElementById('autoMoveSettings');
   const instantMoveToggle = document.getElementById('instantMove');
-  const delaySettings = document.getElementById('delaySettings');
   const delayMinInput = document.getElementById('delayMin');
   const delayMaxInput = document.getElementById('delayMax');
   const smartTimingToggle = document.getElementById('smartTiming');
-  const smartTimingContainer = document.getElementById('smartTimingToggle');
   const skillLevelInput = document.getElementById('skillLevel');
   const skillValueEl = document.getElementById('skillValue');
   const autoRematchToggle = document.getElementById('autoRematch');
@@ -42,10 +40,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   extensionIdEl.textContent = extensionId;
   extensionIdEl.title = 'Click to copy extension ID';
 
+  const accToggle = document.getElementById('accToggle');
+  const wlBalanceToggle = document.getElementById('wlBalance');
+  const wlSettings = document.getElementById('wlSettings');
+  const maxConsecutiveWinsInput = document.getElementById('maxConsecutiveWins');
+  const maxConsecutiveLossesInput = document.getElementById('maxConsecutiveLosses');
+  const throwRndBtn = document.getElementById('throwRndBtn');
+  const lossRndBtn = document.getElementById('lossRndBtn');
+  const gameHistoryDisplay = document.getElementById('gameHistoryDisplay');
+  const throwIndicator = document.getElementById('throwIndicator');
+  const winIndicator = document.getElementById('winIndicator');
+  const matchEloToggle = document.getElementById('matchElo');
+  const eloSettings = document.getElementById('eloSettings');
+  const eloStatusText = document.getElementById('eloStatusText');
+  const manualEloInput = document.getElementById('manualElo');
+
+  let currentTargetAccuracy = 100; // 100 = off
+
   // Load current settings
   const settings = await chrome.storage.sync.get([
-    'enabled', 'showBestMove', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch', 'autoNewGame',
-    'stealthMode', 'engineDepth', 'engineSource', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel'
+    'enabled', 'showBestMove', 'showMoveIcon', 'autoMove', 'instantMove', 'smartTiming', 'autoRematch', 'autoNewGame',
+    'stealthMode', 'engineDepth', 'engineSource', 'playerColor', 'autoMoveDelayMin', 'autoMoveDelayMax', 'skillLevel',
+    'targetAccuracy', 'wlBalance', 'maxConsecutiveWins', 'maxConsecutiveLosses',
+    'throwRandom', 'lossRandom', 'matchElo', 'manualElo'
   ]);
   let isEnabled = settings.enabled !== false;
   if (isEnabled) {
@@ -56,6 +73,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     enableToggle.textContent = 'Disabled';
   }
   showBestMove.checked = settings.showBestMove === true;
+  showMoveIconToggle.checked = settings.showMoveIcon === true;
   autoMoveToggle.checked = settings.autoMove === true;
   autoRematchToggle.checked = settings.autoRematch === true;
   autoNewGameToggle.checked = settings.autoNewGame === true;
@@ -73,13 +91,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   skillLevelInput.value = settings.skillLevel ?? 20;
   skillValueEl.textContent = skillLevelInput.value;
 
-  // Show auto-move settings panel if auto-move is enabled
-  if (autoMoveToggle.checked) {
-    autoMoveSettings.classList.remove('hidden');
+  currentTargetAccuracy = settings.targetAccuracy ?? 100;
+  updateAccButtons();
+
+  wlBalanceToggle.checked = settings.wlBalance === true;
+  maxConsecutiveWinsInput.value = settings.maxConsecutiveWins ?? 2;
+  maxConsecutiveLossesInput.value = settings.maxConsecutiveLosses ?? 3;
+  if (settings.throwRandom) throwRndBtn.classList.add('active');
+  if (settings.lossRandom) lossRndBtn.classList.add('active');
+
+  matchEloToggle.checked = settings.matchElo === true;
+  if (settings.manualElo) manualEloInput.value = settings.manualElo;
+
+  // Load game history + flags from local storage
+  const localData = await chrome.storage.local.get(['gameHistory', 'shouldThrowNextGame', 'shouldWinNextGame', 'detectedElo']);
+  renderGameHistory(localData.gameHistory || [], localData.shouldThrowNextGame === true, localData.shouldWinNextGame === true);
+  if (localData.detectedElo) {
+    eloStatusText.textContent = `Detected: ${localData.detectedElo}`;
+    eloStatusText.classList.add('detected');
   }
 
-  // Update delay settings visibility based on instant move setting
-  updateDelaySettingsVisibility();
 
   // Update button states
   updateEngineButtons();
@@ -112,35 +143,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     notifyContentScripts({ type: 'SETTINGS_UPDATED', showBestMove: showBestMove.checked });
   });
 
+  // Toggle move icon
+  showMoveIconToggle.addEventListener('change', async () => {
+    await chrome.storage.sync.set({ showMoveIcon: showMoveIconToggle.checked });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', showMoveIcon: showMoveIconToggle.checked });
+  });
+
   // Toggle auto move
   autoMoveToggle.addEventListener('change', async () => {
     await chrome.storage.sync.set({ autoMove: autoMoveToggle.checked });
-    // Show/hide auto-move settings panel
-    if (autoMoveToggle.checked) {
-      autoMoveSettings.classList.remove('hidden');
-    } else {
-      autoMoveSettings.classList.add('hidden');
-    }
     notifyContentScripts({ type: 'SETTINGS_UPDATED', autoMove: autoMoveToggle.checked });
   });
 
   // Toggle instant move
   instantMoveToggle.addEventListener('change', async () => {
     await chrome.storage.sync.set({ instantMove: instantMoveToggle.checked });
-    updateDelaySettingsVisibility();
     notifyContentScripts({ type: 'SETTINGS_UPDATED', instantMove: instantMoveToggle.checked });
   });
-
-  // Update delay settings visibility based on instant move
-  function updateDelaySettingsVisibility() {
-    if (instantMoveToggle.checked) {
-      delaySettings.classList.add('disabled');
-      smartTimingContainer.classList.add('disabled');
-    } else {
-      delaySettings.classList.remove('disabled');
-      smartTimingContainer.classList.remove('disabled');
-    }
-  }
 
   // Toggle smart timing
   smartTimingToggle.addEventListener('change', async () => {
@@ -194,6 +213,105 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Service worker might not be ready
     }
     notifyContentScripts({ type: 'SETTINGS_UPDATED', skillLevel: level });
+  });
+
+  // Accuracy target buttons
+  accToggle.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.acc-btn');
+    if (!btn) return;
+    currentTargetAccuracy = parseInt(btn.dataset.acc);
+    updateAccButtons();
+    await chrome.storage.sync.set({ targetAccuracy: currentTargetAccuracy });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', targetAccuracy: currentTargetAccuracy });
+  });
+
+  function updateAccButtons() {
+    accToggle.querySelectorAll('.acc-btn').forEach(btn => {
+      btn.classList.toggle('active', parseInt(btn.dataset.acc) === currentTargetAccuracy);
+    });
+  }
+
+  // W/L Balance toggle
+  wlBalanceToggle.addEventListener('change', async () => {
+    await chrome.storage.sync.set({ wlBalance: wlBalanceToggle.checked });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', wlBalance: wlBalanceToggle.checked });
+  });
+
+  // Max consecutive wins input
+  maxConsecutiveWinsInput.addEventListener('change', async () => {
+    const val = Math.max(1, Math.min(10, parseInt(maxConsecutiveWinsInput.value) || 2));
+    maxConsecutiveWinsInput.value = val;
+    await chrome.storage.sync.set({ maxConsecutiveWins: val });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', maxConsecutiveWins: val });
+  });
+
+  // Throw random toggle
+  throwRndBtn.addEventListener('click', async () => {
+    throwRndBtn.classList.toggle('active');
+    const rnd = throwRndBtn.classList.contains('active');
+    await chrome.storage.sync.set({ throwRandom: rnd });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', throwRandom: rnd });
+  });
+
+  // Max consecutive losses input
+  maxConsecutiveLossesInput.addEventListener('change', async () => {
+    const val = Math.max(1, Math.min(10, parseInt(maxConsecutiveLossesInput.value) || 3));
+    maxConsecutiveLossesInput.value = val;
+    await chrome.storage.sync.set({ maxConsecutiveLosses: val });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', maxConsecutiveLosses: val });
+  });
+
+  // Loss random toggle
+  lossRndBtn.addEventListener('click', async () => {
+    lossRndBtn.classList.toggle('active');
+    const rnd = lossRndBtn.classList.contains('active');
+    await chrome.storage.sync.set({ lossRandom: rnd });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', lossRandom: rnd });
+  });
+
+  // Match ELO toggle
+  matchEloToggle.addEventListener('change', async () => {
+    await chrome.storage.sync.set({ matchElo: matchEloToggle.checked });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', matchElo: matchEloToggle.checked });
+    if (!matchEloToggle.checked) {
+      await chrome.storage.local.remove('detectedElo');
+      eloStatusText.textContent = 'Auto-detect from Chess.com';
+      eloStatusText.classList.remove('detected');
+    }
+  });
+
+  // Manual ELO override
+  manualEloInput.addEventListener('change', async () => {
+    const val = manualEloInput.value ? parseInt(manualEloInput.value) : null;
+    await chrome.storage.sync.set({ manualElo: val });
+    notifyContentScripts({ type: 'SETTINGS_UPDATED', manualElo: val });
+  });
+
+  // Render game history dots
+  function renderGameHistory(history, shouldThrow, shouldWin) {
+    gameHistoryDisplay.innerHTML = '';
+    const last10 = history.slice(-10);
+    for (const r of last10) {
+      const dot = document.createElement('div');
+      dot.className = `history-dot ${r === 'w' ? 'win' : r === 'l' ? 'loss' : 'draw'}`;
+      dot.title = r === 'w' ? 'Win' : r === 'l' ? 'Loss' : 'Draw';
+      gameHistoryDisplay.appendChild(dot);
+    }
+    throwIndicator.classList.toggle('hidden', !shouldThrow);
+    winIndicator.classList.toggle('hidden', !shouldWin);
+  }
+
+  // Refresh game history when popup opens (storage may have updated)
+  chrome.storage.local.onChanged.addListener((changes) => {
+    if (changes.gameHistory || changes.shouldThrowNextGame || changes.shouldWinNextGame || changes.detectedElo) {
+      chrome.storage.local.get(['gameHistory', 'shouldThrowNextGame', 'shouldWinNextGame', 'detectedElo'], (data) => {
+        renderGameHistory(data.gameHistory || [], data.shouldThrowNextGame === true, data.shouldWinNextGame === true);
+        if (data.detectedElo) {
+          eloStatusText.textContent = `Detected: ${data.detectedElo}`;
+          eloStatusText.classList.add('detected');
+        }
+      });
+    }
   });
 
   // Toggle auto rematch (mutually exclusive with auto new game)

@@ -214,6 +214,9 @@ def read_stockfish_output():
     """Read output from Stockfish and send to extension."""
     global stop_requested, engine_ready, analysis_in_progress
 
+    # Accumulate MultiPV slots; key = slot index (1-based), value = eval_data
+    multipv_slots = {}
+
     while stockfish_process and stockfish_process.poll() is None:
         try:
             line = stockfish_process.stdout.readline()
@@ -228,6 +231,7 @@ def read_stockfish_output():
                 # Configure engine
                 stockfish_process.stdin.write("setoption name Threads value 4\n")
                 stockfish_process.stdin.write("setoption name Hash value 128\n")
+                stockfish_process.stdin.write("setoption name MultiPV value 3\n")
                 stockfish_process.stdin.write("isready\n")
                 stockfish_process.stdin.flush()
 
@@ -240,11 +244,28 @@ def read_stockfish_output():
                 if stop_requested:
                     continue
                 eval_data = parse_info(line)
-                if eval_data and eval_data.get("depth", 0) >= 5:
+                if not eval_data or eval_data.get("depth", 0) < 5:
+                    continue
+
+                slot = eval_data.get("multipv", 1)
+                multipv_slots[slot] = eval_data
+
+                # Only broadcast when slot 1 (the best line) is received.
+                # Attach the first move from each slot so the UI can draw
+                # alternative arrows for the current position.
+                if slot == 1:
+                    # Collect best move per slot (all valid moves for this position)
+                    multi_pv_moves = []
+                    for s in [1, 2, 3]:
+                        mv = multipv_slots.get(s, {}).get("bestMove")
+                        if mv:
+                            multi_pv_moves.append(mv)
+                    eval_data["multiPvMoves"] = multi_pv_moves
                     send_message({"type": "eval", "data": eval_data})
 
             elif line.startswith("bestmove"):
                 analysis_in_progress = False
+                multipv_slots = {}  # Reset for next position
                 if stop_requested:
                     continue
                 parts = line.split()
@@ -270,6 +291,15 @@ def parse_info(line):
             idx = line.index("depth ") + 6
             end = line.index(" ", idx) if " " in line[idx:] else len(line)
             data["depth"] = int(line[idx:end])
+        except Exception:
+            pass
+
+    # Extract multipv slot index
+    if "multipv " in line:
+        try:
+            idx = line.index("multipv ") + 8
+            end = line.index(" ", idx) if " " in line[idx:] else len(line)
+            data["multipv"] = int(line[idx:end])
         except Exception:
             pass
 
@@ -300,7 +330,7 @@ def parse_info(line):
             pv_moves = line[idx:].split()
             if pv_moves:
                 data["bestMove"] = pv_moves[0]
-                data["pv"] = pv_moves  # Include full PV for caching
+                data["pv"] = pv_moves
         except Exception:
             pass
 
